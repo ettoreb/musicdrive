@@ -117,30 +117,55 @@ com.ettore.musicdrive/
 ## Current status
 Google Cloud Console configured (Drive API enabled, consent screen, Android +
 Web OAuth clients). Compose is wired up. Auth module implemented:
-- auth/GoogleSignInManager.kt — Credential Manager sign-in (identity only)
+- auth/GoogleSignInManager.kt — Credential Manager sign-in. signInSilently()
+  (filterByAuthorizedAccounts=true) is tried first on every launch so the
+  user isn't re-prompted; signInInteractive() (account picker) is the
+  fallback shown only on SignInResult.NoCredential.
 - auth/DriveAuthorizationManager.kt — Identity.getAuthorizationClient consent
   flow for drive.readonly, via ActivityResultLauncher<IntentSenderRequest>
 - auth/DriveTokenProvider.kt — in-memory token cache, forceRefresh param
 - data/drive/DriveRepository.kt — lists audio files via com.google.api.services.drive
-MainActivity has a smoke-test screen: "Sign in with Google" -> Drive
-authorization -> lists audio files in a LazyColumn. `./gradlew assembleDebug`
-succeeds, AND the full flow has been verified live end to end on the
-musicdrive_test emulator with a real Google account (ettore.bartoli17@gmail.com,
-added as an OAuth test user) — sign-in, Drive consent, and the real file list
-(mp3s) all worked. No playback/download code yet.
+
+Playback foundation implemented:
+- data/local/SettingsRepository.kt — DataStore, cache_limit_bytes (2 GB default)
+- playback/AdjustableLruEvictor.kt — CacheEvictor with a live-adjustable maxBytes
+- MusicDriveApplication.kt — owns the two SimpleCache singletons (streaming:
+  cacheDir + AdjustableLruEvictor; download: filesDir + NoOpCacheEvictor) and
+  a nullable driveTokenProvider set by MainActivity once it starts (see the
+  known limitation noted in that file — cold-starting playback before
+  MainActivity has ever run isn't handled yet)
+- playback/DriveDataSourceFactory.kt — AuthenticatingHttpDataSource injects a
+  fresh Bearer token per request and retries once on 401; layered
+  CacheDataSource.Factory chain (download cache, read-only here -> streaming
+  cache, read+write -> auth http). Matches the download -> streaming ->
+  network resolution order.
+- playback/MusicPlaybackService.kt — MediaSessionService wiring ExoPlayer to
+  the layered factory
+
+MainActivity: launch now always attempts silent sign-in first (Loading state,
+no button flash); on success it lists Drive audio files and each row is
+tappable, building a MediaItem and playing it through a MediaController bound
+to MusicPlaybackService. `./gradlew assembleDebug` succeeds, and the FULL
+chain — silent sign-in, Drive listing, tap-to-play, auth'd network fetch,
+streaming-cache write, MediaCodec decode, and the system media notification
+with embedded album art (Media3 extracted it from the MP3's ID3 tags) — has
+been verified live on the musicdrive_test emulator. No downloads, folder
+picker, or real UI yet — this is still the tap-a-row-in-a-LazyColumn
+smoke-test screen.
 
 ## Next steps
-1. Playback (Media3/ExoPlayer, MediaSessionService, the two SimpleCache
-   instances) — start here, everything else builds on it
-2. Music folder picker: in-app Drive folder browser, persist chosen root
+1. Music folder picker: in-app Drive folder browser, persist chosen root
    folder id in DataStore, scope the library index to it
-3. Material 3 UI pass: library grid, album detail view, mini-player + full
+2. Material 3 UI pass: library grid, album detail view, mini-player + full
    player (YouTube Music-style layout, not visual clone)
-4. Lyrics: embedded-tag extraction via Media3, LRCLIB fallback
-5. Automatic album covers: embedded-art extraction via Media3, iTunes Search
+3. Lyrics: embedded-tag extraction via Media3, LRCLIB fallback
+4. Automatic album covers: embedded-art extraction via Media3, iTunes Search
    API fallback
-6. Android Auto: MediaLibraryService browsing tree + automotive app
+5. Android Auto: MediaLibraryService browsing tree + automotive app
    descriptor
+6. Downloads: Media3 DownloadManager writing into the download cache,
+   per-song/per-album, never evicted
+7. Room-cached Drive index (currently every launch re-lists all of Drive)
 
 ## Reference
 - androidx/media demo apps are the canonical reference for DownloadManager

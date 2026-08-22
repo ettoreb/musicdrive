@@ -6,16 +6,17 @@ project, sideloaded (not published to the Play Store).
 
 ## Status
 
-🚧 Early development. Google sign-in and Drive access are working end to
-end; playback and the rest of the UI are still to come.
+🚧 Early development. Sign-in, Drive access, and background playback (with
+the streaming cache and media notification) are all working end to end; the
+real UI, downloads, and the rest of the roadmap are still to come.
 
 | Feature | Status |
 |---|---|
-| Google sign-in (Credential Manager) | ✅ Working |
+| Google sign-in (Credential Manager, remembered across launches) | ✅ Working |
 | Drive authorization (`drive.readonly`) | ✅ Working |
 | List audio files from Drive | ✅ Working (smoke test) |
-| Playback (Media3/ExoPlayer, background, notification, queue) | ⏳ Next up |
-| Streaming cache (configurable size, LRU eviction) | ⏳ Planned |
+| Playback (Media3/ExoPlayer, background, notification, queue) | ✅ Working (smoke test) |
+| Streaming cache (configurable size, LRU eviction) | ✅ Working (eviction limit not yet user-facing) |
 | Permanent offline downloads | ⏳ Planned |
 | Music folder picker (choose Drive library root) | ⏳ Planned |
 | Material 3 UI, album view, mini/full player | ⏳ Planned |

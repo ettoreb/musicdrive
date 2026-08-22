@@ -5,6 +5,7 @@ import androidx.credentials.CredentialManager
 import androidx.credentials.CustomCredential
 import androidx.credentials.GetCredentialRequest
 import androidx.credentials.exceptions.GetCredentialException
+import androidx.credentials.exceptions.NoCredentialException
 import com.ettore.musicdrive.BuildConfig
 import com.google.android.libraries.identity.googleid.GetGoogleIdOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
@@ -18,6 +19,10 @@ data class SignedInUser(
 
 sealed class SignInResult {
     data class Success(val user: SignedInUser) : SignInResult()
+
+    /** No remembered/authorized Google account is available; caller should fall back to interactive sign-in. */
+    data object NoCredential : SignInResult()
+
     data class Failure(val message: String, val cause: Throwable? = null) : SignInResult()
 }
 
@@ -30,11 +35,17 @@ class GoogleSignInManager(private val context: Context) {
 
     private val credentialManager = CredentialManager.create(context)
 
-    suspend fun signIn(): SignInResult {
+    /** Attempts to sign in using a previously authorized account only, with no UI shown. */
+    suspend fun signInSilently(): SignInResult = signIn(filterByAuthorizedAccounts = true, autoSelectEnabled = true)
+
+    /** Shows the account picker / consent UI, offering any Google account on the device. */
+    suspend fun signInInteractive(): SignInResult = signIn(filterByAuthorizedAccounts = false, autoSelectEnabled = false)
+
+    private suspend fun signIn(filterByAuthorizedAccounts: Boolean, autoSelectEnabled: Boolean): SignInResult {
         val option = GetGoogleIdOption.Builder()
             .setServerClientId(BuildConfig.GOOGLE_WEB_CLIENT_ID)
-            .setFilterByAuthorizedAccounts(false)
-            .setAutoSelectEnabled(false)
+            .setFilterByAuthorizedAccounts(filterByAuthorizedAccounts)
+            .setAutoSelectEnabled(autoSelectEnabled)
             .build()
 
         val request = GetCredentialRequest.Builder()
@@ -58,6 +69,8 @@ class GoogleSignInManager(private val context: Context) {
             } else {
                 SignInResult.Failure("Unexpected credential type: ${credential.type}")
             }
+        } catch (e: NoCredentialException) {
+            SignInResult.NoCredential
         } catch (e: GetCredentialException) {
             SignInResult.Failure("Sign-in failed: ${e.message}", e)
         } catch (e: GoogleIdTokenParsingException) {

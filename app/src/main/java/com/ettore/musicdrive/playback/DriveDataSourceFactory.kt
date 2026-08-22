@@ -1,0 +1,73 @@
+package com.ettore.musicdrive.playback
+
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.DataSource
+import androidx.media3.datasource.DataSpec
+import androidx.media3.datasource.DefaultHttpDataSource
+import androidx.media3.datasource.HttpDataSource
+import androidx.media3.datasource.cache.CacheDataSource
+import com.ettore.musicdrive.MusicDriveApplication
+import com.ettore.musicdrive.auth.DriveTokenProvider
+import kotlinx.coroutines.runBlocking
+
+/**
+ * Wraps an HttpDataSource so every request carries a fresh Drive access
+ * token, retrying once with a forced refresh on a 401 rather than failing
+ * the whole playback. Blocking on the token fetch is safe here: Media3
+ * calls DataSource.open() from its own loading thread, never the main thread.
+ */
+@UnstableApi
+private class AuthenticatingHttpDataSource(
+    private val wrapped: HttpDataSource,
+    private val tokenProvider: DriveTokenProvider,
+) : HttpDataSource by wrapped {
+
+    override fun open(dataSpec: DataSpec): Long {
+        val token = runBlocking { tokenProvider.getAccessToken() }.getOrThrow()
+        wrapped.setRequestProperty("Authorization", "Bearer $token")
+        return try {
+            wrapped.open(dataSpec)
+        } catch (e: HttpDataSource.InvalidResponseCodeException) {
+            if (e.responseCode == 401) {
+                val refreshed = runBlocking { tokenProvider.getAccessToken(forceRefresh = true) }.getOrThrow()
+                wrapped.setRequestProperty("Authorization", "Bearer $refreshed")
+                wrapped.open(dataSpec)
+            } else {
+                throw e
+            }
+        }
+    }
+}
+
+@UnstableApi
+private class AuthenticatingHttpDataSourceFactory(
+    private val tokenProvider: DriveTokenProvider,
+    private val upstream: HttpDataSource.Factory = DefaultHttpDataSource.Factory(),
+) : DataSource.Factory {
+    override fun createDataSource(): DataSource =
+        AuthenticatingHttpDataSource(upstream.createDataSource(), tokenProvider)
+}
+
+/**
+ * Playback source resolution order: download cache -> streaming cache ->
+ * network. Downloads are written only by Media3's DownloadManager, never by
+ * this playback path (setCacheWriteDataSinkFactory(null) on the download
+ * cache layer), matching the two-cache split in CLAUDE.md.
+ */
+@UnstableApi
+fun buildDriveDataSourceFactory(
+    application: MusicDriveApplication,
+    tokenProvider: DriveTokenProvider,
+): DataSource.Factory {
+    val authHttpFactory = AuthenticatingHttpDataSourceFactory(tokenProvider)
+
+    val streamingCacheFactory = CacheDataSource.Factory()
+        .setCache(application.streamingCache)
+        .setUpstreamDataSourceFactory(authHttpFactory)
+
+    return CacheDataSource.Factory()
+        .setCache(application.downloadCache)
+        .setUpstreamDataSourceFactory(streamingCacheFactory)
+        .setCacheWriteDataSinkFactory(null)
+        .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
+}
