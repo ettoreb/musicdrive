@@ -3,6 +3,10 @@
 Android music player that streams from Google Drive, functionally similar to
 YouTube Music (not a visual clone). Personal/sideloaded app, not for Play Store.
 
+Keep [README.md](README.md)'s status table and feature list in sync whenever
+a roadmap item lands or the plan changes — it's the GitHub-facing summary of
+this file.
+
 ## Environment
 - Ubuntu, JDK 17, Android Studio (tarball install at /opt/android-studio)
 - Package / namespace: com.ettore.musicdrive
@@ -40,6 +44,15 @@ YouTube Music (not a visual clone). Personal/sideloaded app, not for Play Store.
 3. Separate, permanent offline downloads (per-song and per-album) that are
    NEVER auto-evicted
 4. Background playback, media notification, queue, mini-player + full player
+5. User picks which Drive folder is the music library root, instead of
+   scanning all Drive audio files
+6. Material 3 UI throughout
+7. Album grid + album detail view, YouTube Music-style (not a visual clone)
+8. Mini-player + full-screen player, YouTube Music-style (expand/collapse,
+   queue, seek)
+9. Lyrics: embedded tags first, LRCLIB fallback when missing
+10. Album covers: embedded art first, online fallback when missing
+11. Android Auto support
 
 ## Architecture decisions already made
 - Playback: Media3 / ExoPlayer, MediaSessionService
@@ -53,6 +66,24 @@ YouTube Music (not a visual clone). Personal/sideloaded app, not for Play Store.
 - Library model: Drive folder = album (simplest starting point)
 - Room caches the Drive index so the library browses instantly offline
 - Settings persisted in DataStore (key: cache_limit_bytes, default 2 GB)
+- Music folder root: in-app Drive folder browser (reuse the existing Drive
+  API client, no separate Google Picker API/key needed) to choose the root
+  folder; its id persisted in DataStore (key: library_root_folder_id).
+  Subfolders directly under it = albums, per the existing folder=album model.
+- Lyrics: Media3's extractor already parses embedded ID3 USLT/SYLT and FLAC
+  LYRICS tags as part of format metadata during extraction — read that first,
+  no separate tagging library needed. Fall back to LRCLIB (free, no API key,
+  https://lrclib.net, matched by artist/title/duration) when no embedded
+  lyrics are found. Cache fetched lyrics in Room keyed by track id.
+- Album covers: same idea — Media3 extracts embedded APIC/FLAC picture frames
+  during extraction, use that first. Fall back to the iTunes Search API
+  (free, no key, matched by album+artist) when no embedded art is found.
+  Cache resolved cover URLs/bitmaps in Room/disk cache keyed by album id.
+- Android Auto: extend MusicPlaybackService to MediaLibraryService
+  (implement onGetLibraryRoot/onGetChildren over the same Room-cached Drive
+  index used by the phone UI), plus an automotive_app_desc.xml declaring
+  <uses name="media"/> and the matching manifest meta-data. No separate
+  playback path — same MediaSession the phone UI drives.
 
 ## Auth (highest-risk area)
 - Legacy Drive Android API and legacy Google Sign-In are deprecated. Use:
@@ -99,8 +130,17 @@ added as an OAuth test user) — sign-in, Drive consent, and the real file list
 (mp3s) all worked. No playback/download code yet.
 
 ## Next steps
-1. Move on to playback (Media3/ExoPlayer, MediaSessionService, the two
-   SimpleCache instances)
+1. Playback (Media3/ExoPlayer, MediaSessionService, the two SimpleCache
+   instances) — start here, everything else builds on it
+2. Music folder picker: in-app Drive folder browser, persist chosen root
+   folder id in DataStore, scope the library index to it
+3. Material 3 UI pass: library grid, album detail view, mini-player + full
+   player (YouTube Music-style layout, not visual clone)
+4. Lyrics: embedded-tag extraction via Media3, LRCLIB fallback
+5. Automatic album covers: embedded-art extraction via Media3, iTunes Search
+   API fallback
+6. Android Auto: MediaLibraryService browsing tree + automotive app
+   descriptor
 
 ## Reference
 - androidx/media demo apps are the canonical reference for DownloadManager
