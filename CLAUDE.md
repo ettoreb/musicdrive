@@ -279,6 +279,22 @@ Auto, downloads, Room index, queue view). Playback optimization (previously
 
 ## Reference
 - androidx/media demo apps are the canonical reference for DownloadManager
-- Considered forking mardous/BoomingMusic (has Jellyfin/Navidrome remote-source
-  abstraction that a Drive backend could slot into). GPL-3.0 — fine for personal
-  use, but publishing would require releasing source.
+- Evaluated forking mardous/BoomingMusic (2026-08-22) — DECIDED AGAINST.
+  Its entire library/index layer is built on Android's MediaStore (the OS
+  already indexes local files for it); Room there is only used for
+  playlists/queue/history/lyrics-cache, NOT a library index — it has no
+  equivalent to "cache a remote API's listing", which is our actual hardest
+  problem and the reason we need Room at all. Forking would mean ripping out
+  its core data layer first, more work than continuing our own code. GPL-3.0
+  either way, so anything taken beyond ideas/patterns would need attribution
+  and source release on publish.
+  Still useful as REFERENCE (not code to copy) for later roadmap items:
+  - Lyrics: confirms LRCLIB is the right call. Their query:
+    GET https://lrclib.net/api/search?q={artist}+{title}&album_name={album}
+    then pick the result whose duration is within 2s of the track's,
+    falling back to the first non-empty plainLyrics. Room cache is just
+    `LyricsEntity(id, lyrics, provider, isInstrumental)` keyed by song id.
+  - Queue persistence: `QueueEntity(id, order)` + a replaceQueue transaction
+    (delete rows not in the new id list, then insert) — good minimal pattern.
+  - Android Auto: their automotive_app_desc.xml is the standard AOSP
+    `<uses name="media"/>` boilerplate, same as already planned here.
