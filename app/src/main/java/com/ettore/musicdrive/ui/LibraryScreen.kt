@@ -31,18 +31,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import com.ettore.musicdrive.data.drive.DriveAlbum
-import kotlin.math.abs
-
-/** Placeholder art until automatic album covers land: a colored tile with the album's initial. */
-private val placeholderPalette = listOf(
-    0xFF6750A4, 0xFF7D5260, 0xFF386A20, 0xFF984061, 0xFF31628E, 0xFF8C4A2F,
-)
-
-private fun placeholderColorFor(name: String): Color {
-    val hash = name.hashCode()
-    val index = (if (hash == Int.MIN_VALUE) 0 else abs(hash)) % placeholderPalette.size
-    return Color(placeholderPalette[index])
-}
 
 @Composable
 fun LibraryScreen(

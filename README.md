@@ -16,7 +16,7 @@ lyrics, and Android Auto are still to come.
 | Google sign-in (Credential Manager, remembered across launches) | ✅ Working |
 | Drive authorization (`drive.readonly`) | ✅ Working |
 | Music folder picker (choose Drive library root) | ✅ Working |
-| Library grid, album detail view (Material 3) | ✅ Working |
+| Artist list → album grid → album detail (Material 3) | ✅ Working |
 | Automatic album covers (embedded art + iTunes fallback) | ✅ Working |
 | Playback (Media3/ExoPlayer, background, notification, queue) | ✅ Working |
 | Mini-player + full-screen player (expand/collapse, seek, skip) | ✅ Working |

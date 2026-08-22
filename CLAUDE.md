@@ -197,10 +197,8 @@ Automatic album covers implemented:
   querying "{artistHint} {albumName}" for precision. Both paths cached
   in-memory for the process lifetime too (including a cached "no art found"
   null, so failures aren't retried every recomposition).
-- DriveAlbum gained artistHint: String? — the album folder's parent folder
-  name (e.g. "Depeche Mode"), threaded through collectAlbumFolders'
-  recursion, used only to sharpen the iTunes query. Null on flatter
-  root/Album layouts.
+- DriveAlbum gained artistHint: String? — see "Album/artist view" below for
+  exactly what this is threaded from (it changed after a real bug was found).
 - ui/LibraryScreen.kt — AlbumGridItem resolves art lazily per album
   (LaunchedEffect) and shows a Coil AsyncImage in place of the placeholder
   tile once resolved.
@@ -289,21 +287,56 @@ Room-cached Drive index implemented:
   art (which has its own separate disk cache, unrelated to this) fills in
   a moment after, not blocking the list itself.
 
+Album/artist view implemented:
+- Real bug found and fixed: artistHint was originally the album folder's
+  IMMEDIATE parent name, which mislabels multi-disc releases. A real Drive
+  library has releases like root/U2/Achtung Baby (30th Anniversary
+  Edition)/CD1/track.mp3 — 4 levels, not the assumed 3 — so "CD1" (and its
+  parent, the release name) qualified as "albums" and their immediate
+  parents got read as fake artists ("18 Singles (deluxe)", "Achtung Baby
+  (30th Anniversary Edition)" showed up as artists in the list). Fixed by
+  changing collectAlbumFolders' artistHint (renamed from parentName) to
+  track the ROOT'S DIRECT CHILD folder name — set once, the first time
+  recursion leaves the root, then threaded unchanged through however many
+  Release/CDn layers follow — instead of the immediate parent. Verified:
+  artist list now correctly shows only "Depeche Mode" and "U2", and
+  Depeche Mode's album grid correctly includes its CD1/CD2/etc. discs.
+- Known follow-up NOT fixed (out of scope for this task, flagging for
+  later): multi-disc releases still show as separate "albums" (CD1, CD2,
+  Disc 1 - ...) rather than being merged into one album under the release
+  name. Fixing that needs a different album-boundary heuristic (e.g. don't
+  treat CD-numbered folders as the album boundary; use their parent
+  instead) — it's a real, user-visible rough edge in the library model,
+  not just a display nit.
+- ui/PlaceholderArt.kt and ui/ScreenHeader.kt: extracted from LibraryScreen
+  and AlbumDetailScreen respectively so ArtistListScreen (and the new
+  ArtistAlbums route's header) could reuse them instead of a third copy.
+- ui/ArtistListScreen.kt — ArtistSummary + List<DriveAlbum>.groupByArtist()
+  (groups by artistHint, falling back to "Unknown Artist" for a flat
+  root/Album layout with no hint), and a LazyColumn of artist rows (circular
+  initial avatar, name, album/track counts).
+- MainActivity's LibraryRoute is now a 3-level stack: Artists ->
+  ArtistAlbums(artist) -> AlbumDetail(album, artist) — AlbumDetail carries
+  the artist along so its back button returns to that artist's album grid,
+  not straight to the artist list.
+- Verified live end to end on the emulator: artist list, artist -> albums,
+  album -> track detail, and back-navigation at every level all correct.
+
 ## Next steps
 Reprioritized 2026-08-22 per explicit user ordering (was: lyrics, Android
-Auto, downloads, Room index, queue view). Playback optimization and the
-Room-cached index (previously #1 and #2) are both done — see above.
-1. Album/artist short view: a browse-by-artist layer above LibraryScreen
-   (artist list -> that artist's albums -> album detail), using the
-   artistHint AlbumArtRepository/AlbumEntity already derive from folder
-   structure
-2. Queue view (the full player has next/prev but no visible upcoming-tracks
+Auto, downloads, Room index, queue view). Playback optimization, the
+Room-cached index, and the album/artist view (previously #1-#3) are all
+done — see above.
+1. Queue view (the full player has next/prev but no visible upcoming-tracks
    list yet)
-3. Lyrics: embedded-tag extraction via Media3, LRCLIB fallback
-4. Downloads: Media3 DownloadManager writing into the download cache,
+2. Lyrics: embedded-tag extraction via Media3, LRCLIB fallback
+3. Downloads: Media3 DownloadManager writing into the download cache,
    per-song/per-album, never evicted
-5. Android Auto: MediaLibraryService browsing tree + automotive app
+4. Android Auto: MediaLibraryService browsing tree + automotive app
    descriptor
+5. (not user-ordered, opportunistic) Merge multi-disc release folders
+   (CD1/CD2/Disc N) into a single album instead of showing each disc as
+   its own album — see "Album/artist view" above
 
 ## Reference
 - androidx/media demo apps are the canonical reference for DownloadManager

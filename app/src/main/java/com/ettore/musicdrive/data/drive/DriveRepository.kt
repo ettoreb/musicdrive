@@ -32,12 +32,17 @@ data class DriveFolder(
 data class DriveAlbum(
     val id: String,
     val name: String,
-    /** The album folder's parent folder name, when the library nests as root/Artist/Album. Null for a flatter layout. */
+    /**
+     * The name of the root's direct child folder this album descends from,
+     * when the library nests as root/Artist/.../Album (whatever the depth —
+     * multi-disc releases add a Release/CD1 layer in between). Null for a
+     * flatter root/Album layout.
+     */
     val artistHint: String?,
     val tracks: List<DriveAudioFile>,
 )
 
-private data class AlbumFolderWithParent(val folder: DriveFolder, val parentName: String?)
+private data class AlbumFolderWithArtist(val folder: DriveFolder, val artistName: String?)
 
 private fun DriveFile.toDriveAudioFile() = DriveAudioFile(
     id = id,
@@ -100,8 +105,15 @@ class DriveRepository(private val tokenProvider: DriveTokenProvider) {
     /**
      * Depth-first search for "album" folders: the folder=album model doesn't
      * assume a fixed depth, since real libraries nest differently (e.g.
-     * root/Album vs root/Artist/Album). A folder is an album as soon as it
-     * directly contains an audio file; otherwise its subfolders are searched.
+     * root/Album, root/Artist/Album, or root/Artist/Release/CD1 for
+     * multi-disc releases). A folder is an album as soon as it directly
+     * contains an audio file; otherwise its subfolders are searched.
+     * [artistName] is null only while still resolving the root's direct
+     * children; the first folder name seen right after the root becomes the
+     * artist hint for everything found beneath it, no matter how many
+     * Release/CDn layers come in between — using just the immediate parent
+     * instead would mislabel a multi-disc release's CD1/CD2 folders (and
+     * their own parent, the release name) as if they were artists.
      * [folderName] is only fetched with an extra call in the rare case where
      * the very first folder passed in already qualifies (its name usually
      * comes for free from the parent's listFoldersRaw call instead).
@@ -110,17 +122,20 @@ class DriveRepository(private val tokenProvider: DriveTokenProvider) {
         drive: Drive,
         folderId: String,
         folderName: String?,
-        parentName: String?,
-    ): List<AlbumFolderWithParent> = coroutineScope {
+        artistName: String?,
+    ): List<AlbumFolderWithArtist> = coroutineScope {
         if (folderHasAudioFiles(drive, folderId)) {
             val name = folderName ?: withContext(Dispatchers.IO) {
                 drive.files().get(folderId).setFields("name").execute().name
             }
-            listOf(AlbumFolderWithParent(DriveFolder(folderId, name), parentName))
+            listOf(AlbumFolderWithArtist(DriveFolder(folderId, name), artistName))
         } else {
             listFoldersRaw(drive, folderId)
                 .map { subfolder ->
-                    async { collectAlbumFolders(drive, subfolder.id, subfolder.name, parentName = folderName) }
+                    async {
+                        val childArtistName = artistName ?: subfolder.name
+                        collectAlbumFolders(drive, subfolder.id, subfolder.name, artistName = childArtistName)
+                    }
                 }
                 .awaitAll()
                 .flatten()
@@ -138,7 +153,7 @@ class DriveRepository(private val tokenProvider: DriveTokenProvider) {
      * via the track's parent folder id.
      */
     suspend fun listLibraryAlbums(rootFolderId: String): Result<List<DriveAlbum>> = withDrive { drive ->
-        val albumFolders = collectAlbumFolders(drive, rootFolderId, folderName = null, parentName = null)
+        val albumFolders = collectAlbumFolders(drive, rootFolderId, folderName = null, artistName = null)
         if (albumFolders.isEmpty()) return@withDrive emptyList()
 
         val parentsClause = albumFolders.joinToString(separator = " or ") { "'${it.folder.id}' in parents" }
@@ -156,7 +171,7 @@ class DriveRepository(private val tokenProvider: DriveTokenProvider) {
                 DriveAlbum(
                     id = entry.folder.id,
                     name = entry.folder.name,
-                    artistHint = entry.parentName,
+                    artistHint = entry.artistName,
                     tracks = tracksByAlbumFolderId[entry.folder.id].orEmpty().map { it.toDriveAudioFile() },
                 )
             }

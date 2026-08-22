@@ -43,10 +43,14 @@ import com.ettore.musicdrive.data.drive.DriveRepository
 import com.ettore.musicdrive.data.local.SettingsRepository
 import com.ettore.musicdrive.playback.MusicPlaybackService
 import com.ettore.musicdrive.ui.AlbumDetailScreen
+import com.ettore.musicdrive.ui.ArtistListScreen
+import com.ettore.musicdrive.ui.ArtistSummary
 import com.ettore.musicdrive.ui.FolderPickerScreen
 import com.ettore.musicdrive.ui.FullPlayerScreen
 import com.ettore.musicdrive.ui.LibraryScreen
 import com.ettore.musicdrive.ui.MiniPlayerBar
+import com.ettore.musicdrive.ui.ScreenHeader
+import com.ettore.musicdrive.ui.groupByArtist
 import com.ettore.musicdrive.ui.rememberPlayerUiState
 import com.ettore.musicdrive.ui.theme.MusicDriveTheme
 import com.google.common.util.concurrent.ListenableFuture
@@ -143,8 +147,9 @@ private sealed class AppState {
 }
 
 private sealed class LibraryRoute {
-    data object Albums : LibraryRoute()
-    data class AlbumDetail(val album: DriveAlbum) : LibraryRoute()
+    data object Artists : LibraryRoute()
+    data class ArtistAlbums(val artist: ArtistSummary) : LibraryRoute()
+    data class AlbumDetail(val album: DriveAlbum, val artist: ArtistSummary) : LibraryRoute()
 }
 
 @Composable
@@ -158,13 +163,13 @@ private fun MusicDriveApp(
     onPlayAlbum: (DriveAlbum, startIndex: Int) -> Unit,
 ) {
     var state by remember { mutableStateOf<AppState>(AppState.Loading) }
-    var libraryRoute by remember { mutableStateOf<LibraryRoute>(LibraryRoute.Albums) }
+    var libraryRoute by remember { mutableStateOf<LibraryRoute>(LibraryRoute.Artists) }
     var isPlayerExpanded by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
     suspend fun loadLibrary(rootFolderId: String, rootFolderName: String?) {
         state = AppState.Loading
-        libraryRoute = LibraryRoute.Albums
+        libraryRoute = LibraryRoute.Artists
         // Emits cached data first (if any) for an instant browse, then again once the
         // live Drive fetch lands - the route reset above only happens once, up front,
         // so a background refresh mid-browse doesn't kick the user out of an album.
@@ -264,16 +269,25 @@ private fun MusicDriveApp(
                         )
 
                         is AppState.LibraryLoaded -> when (val route = libraryRoute) {
-                            is LibraryRoute.Albums -> Column(modifier = Modifier.fillMaxSize()) {
+                            is LibraryRoute.Artists -> Column(modifier = Modifier.fillMaxSize()) {
                                 TextButton(onClick = { state = AppState.PickingFolder }) {
                                     Text(
                                         "Change library folder" +
                                             (current.libraryFolderName?.let { " (currently \"$it\")" } ?: ""),
                                     )
                                 }
+                                ArtistListScreen(
+                                    artists = current.albums.groupByArtist(),
+                                    onArtistClick = { libraryRoute = LibraryRoute.ArtistAlbums(it) },
+                                    modifier = Modifier.weight(1f),
+                                )
+                            }
+
+                            is LibraryRoute.ArtistAlbums -> Column(modifier = Modifier.fillMaxSize()) {
+                                ScreenHeader(title = route.artist.name, onBack = { libraryRoute = LibraryRoute.Artists })
                                 LibraryScreen(
-                                    albums = current.albums,
-                                    onAlbumClick = { libraryRoute = LibraryRoute.AlbumDetail(it) },
+                                    albums = route.artist.albums,
+                                    onAlbumClick = { libraryRoute = LibraryRoute.AlbumDetail(it, route.artist) },
                                     resolveArt = albumArtRepository::resolveArt,
                                     modifier = Modifier.weight(1f),
                                 )
@@ -281,7 +295,7 @@ private fun MusicDriveApp(
 
                             is LibraryRoute.AlbumDetail -> AlbumDetailScreen(
                                 album = route.album,
-                                onBack = { libraryRoute = LibraryRoute.Albums },
+                                onBack = { libraryRoute = LibraryRoute.ArtistAlbums(route.artist) },
                                 onTrackClick = { index ->
                                     onPlayAlbum(route.album, index)
                                     isPlayerExpanded = true
