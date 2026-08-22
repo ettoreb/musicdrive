@@ -218,16 +218,27 @@ iTunes-resolved), and the full player shows the actual embedded artwork for
 the currently-playing track alongside its real title/artist.
 
 ## Next steps
-1. Lyrics: embedded-tag extraction via Media3, LRCLIB fallback
-2. Android Auto: MediaLibraryService browsing tree + automotive app
-   descriptor
-3. Downloads: Media3 DownloadManager writing into the download cache,
-   per-song/per-album, never evicted
-4. Room-cached Drive index (currently every launch re-runs the recursive
+Reprioritized 2026-08-22 per explicit user ordering (was: lyrics, Android
+Auto, downloads, Room index, queue view).
+1. Optimize playback — scope not yet defined; likely candidates: the
+   cold-start gap (driveTokenProvider is null until MainActivity has run
+   once, see MusicDriveApplication.kt), startup/buffering latency, and
+   general playback resilience. Clarify exact scope with the user before
+   starting.
+2. Room-cached Drive index (currently every launch re-runs the recursive
    album search and re-lists tracks; album art has its own disk cache
-   already, independent of this)
-5. Queue view (the full player has next/prev but no visible upcoming-tracks
+   already, independent of this) — also what the album/artist view below
+   will want, to avoid re-deriving the artist grouping every launch
+3. Album/artist short view: a browse-by-artist layer above LibraryScreen
+   (artist list -> that artist's albums -> album detail), using the
+   artistHint AlbumArtRepository already derives from folder structure
+4. Queue view (the full player has next/prev but no visible upcoming-tracks
    list yet)
+5. Lyrics: embedded-tag extraction via Media3, LRCLIB fallback
+6. Downloads: Media3 DownloadManager writing into the download cache,
+   per-song/per-album, never evicted
+7. Android Auto: MediaLibraryService browsing tree + automotive app
+   descriptor
 
 ## Reference
 - androidx/media demo apps are the canonical reference for DownloadManager
