@@ -42,7 +42,23 @@ data class DriveAlbum(
     val tracks: List<DriveAudioFile>,
 )
 
-private data class AlbumFolderWithArtist(val folder: DriveFolder, val artistName: String?)
+/** Matches "CD1", "CD 2", "Disc 1", "Disc 1 - Sounds Of The Universe", etc. - the real-world naming convention for multi-disc release subfolders. */
+private val discFolderPattern = Regex("""(?i)^(cd|disc)\s*(\d+)""")
+
+private fun discNumber(folderName: String): Int =
+    discFolderPattern.find(folderName)?.groupValues?.get(2)?.toIntOrNull() ?: Int.MAX_VALUE
+
+private data class AlbumFolderWithArtist(
+    val folder: DriveFolder,
+    val artistName: String?,
+    /**
+     * Physical Drive folder ids whose direct children are this album's
+     * tracks. Just [folder.id] normally, but every disc subfolder's id (in
+     * disc order) when discs were merged under a shared release folder -
+     * see [collectAlbumFolders].
+     */
+    val sourceFolderIds: List<String> = listOf(folder.id),
+)
 
 private fun DriveFile.toDriveAudioFile() = DriveAudioFile(
     id = id,
@@ -102,6 +118,10 @@ class DriveRepository(private val tokenProvider: DriveTokenProvider) {
             .files.orEmpty().isNotEmpty()
     }
 
+    private suspend fun resolveFolderName(drive: Drive, folderId: String): String = withContext(Dispatchers.IO) {
+        drive.files().get(folderId).setFields("name").execute().name
+    }
+
     /**
      * Depth-first search for "album" folders: the folder=album model doesn't
      * assume a fixed depth, since real libraries nest differently (e.g.
@@ -117,6 +137,17 @@ class DriveRepository(private val tokenProvider: DriveTokenProvider) {
      * [folderName] is only fetched with an extra call in the rare case where
      * the very first folder passed in already qualifies (its name usually
      * comes for free from the parent's listFoldersRaw call instead).
+     *
+     * Multi-disc releases (root/Artist/Release/CD1, .../CD2, or .../Disc 1,
+     * .../Disc 2, ...) would otherwise surface each disc as its own "album"
+     * since a disc folder directly contains audio files just like a normal
+     * album folder does. Detected here instead: once every subfolder's own
+     * recursion has come back, any subfolder whose result is a single leaf
+     * album EQUAL TO ITSELF (it directly held audio, wasn't searched deeper)
+     * and whose name matches the CD1/CD2/Disc-N convention is treated as a
+     * disc of THIS folder's release, not a standalone album — this folder
+     * becomes the merged album instead, with tracks drawn from every matched
+     * disc subfolder (see sourceFolderIds / listLibraryAlbums).
      */
     private suspend fun collectAlbumFolders(
         drive: Drive,
@@ -125,20 +156,38 @@ class DriveRepository(private val tokenProvider: DriveTokenProvider) {
         artistName: String?,
     ): List<AlbumFolderWithArtist> = coroutineScope {
         if (folderHasAudioFiles(drive, folderId)) {
-            val name = folderName ?: withContext(Dispatchers.IO) {
-                drive.files().get(folderId).setFields("name").execute().name
-            }
+            val name = folderName ?: resolveFolderName(drive, folderId)
             listOf(AlbumFolderWithArtist(DriveFolder(folderId, name), artistName))
         } else {
-            listFoldersRaw(drive, folderId)
+            val childResults = listFoldersRaw(drive, folderId)
                 .map { subfolder ->
                     async {
                         val childArtistName = artistName ?: subfolder.name
-                        collectAlbumFolders(drive, subfolder.id, subfolder.name, artistName = childArtistName)
+                        subfolder to collectAlbumFolders(drive, subfolder.id, subfolder.name, artistName = childArtistName)
                     }
                 }
                 .awaitAll()
-                .flatten()
+
+            val discChildren = childResults.filter { (subfolder, results) ->
+                results.size == 1 && results[0].folder.id == subfolder.id && discFolderPattern.containsMatchIn(subfolder.name)
+            }
+
+            if (discChildren.isEmpty()) {
+                childResults.flatMap { it.second }
+            } else {
+                val releaseName = folderName ?: resolveFolderName(drive, folderId)
+                val sourceFolderIds = discChildren
+                    .sortedBy { (subfolder, _) -> discNumber(subfolder.name) }
+                    .map { (subfolder, _) -> subfolder.id }
+                val mergedAlbum = AlbumFolderWithArtist(
+                    folder = DriveFolder(folderId, releaseName),
+                    artistName = artistName,
+                    sourceFolderIds = sourceFolderIds,
+                )
+                val discFolderIds = discChildren.map { (subfolder, _) -> subfolder.id }.toSet()
+                val nonDiscResults = childResults.filterNot { (subfolder, _) -> subfolder.id in discFolderIds }.flatMap { it.second }
+                listOf(mergedAlbum) + nonDiscResults
+            }
         }
     }
 
@@ -156,7 +205,9 @@ class DriveRepository(private val tokenProvider: DriveTokenProvider) {
         val albumFolders = collectAlbumFolders(drive, rootFolderId, folderName = null, artistName = null)
         if (albumFolders.isEmpty()) return@withDrive emptyList()
 
-        val parentsClause = albumFolders.joinToString(separator = " or ") { "'${it.folder.id}' in parents" }
+        val parentsClause = albumFolders
+            .flatMap { it.sourceFolderIds }
+            .joinToString(separator = " or ") { "'$it' in parents" }
         val tracks = drive.files().list()
             .setQ("($parentsClause) and mimeType contains 'audio/' and trashed = false")
             .setFields("files(id, name, mimeType, size, parents)")
@@ -165,14 +216,22 @@ class DriveRepository(private val tokenProvider: DriveTokenProvider) {
             .execute()
             .files.orEmpty()
 
-        val tracksByAlbumFolderId = tracks.groupBy { it.parents?.firstOrNull() }
+        // Real physical parent folder id -> tracks, name-sorted (Drive's orderBy=name
+        // sorts the whole flat result set, and groupBy preserves each key's relative
+        // order, so every per-folder sublist comes out name-sorted too).
+        val tracksByParentFolderId = tracks.groupBy { it.parents?.firstOrNull() }
         albumFolders
             .map { entry ->
                 DriveAlbum(
                     id = entry.folder.id,
                     name = entry.folder.name,
                     artistHint = entry.artistName,
-                    tracks = tracksByAlbumFolderId[entry.folder.id].orEmpty().map { it.toDriveAudioFile() },
+                    // Concatenated in sourceFolderIds order (already disc-number-sorted
+                    // for merged multi-disc albums), not re-sorted globally by name, so
+                    // CD1's tracks all come before CD2's instead of interleaving.
+                    tracks = entry.sourceFolderIds
+                        .flatMap { tracksByParentFolderId[it].orEmpty() }
+                        .map { it.toDriveAudioFile() },
                 )
             }
             .filter { it.tracks.isNotEmpty() }

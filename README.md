@@ -7,18 +7,20 @@ project, sideloaded (not published to the Play Store).
 ## Status
 
 🚧 Early development, but the core loop works: sign in, pick your Drive
-music folder, browse a real album grid with real cover art, and play — with
-background playback, a streaming cache, a mini/full player, a queue view,
-lyrics, and permanent per-song/per-album downloads. Android Auto is still
-to come.
+music folder, browse a Home dashboard of your most-played songs or a real
+album grid with real cover art, and play — with background playback, a
+streaming cache, a mini/full player, a queue view, lyrics, and permanent
+per-song/per-album downloads. Android Auto is still to come.
 
 | Feature | Status |
 |---|---|
 | Google sign-in (Credential Manager, remembered across launches) | ✅ Working |
 | Drive authorization (`drive.readonly`) | ✅ Working |
 | Music folder picker (choose Drive library root) | ✅ Working |
-| Artists / Albums view toggle, sortable by name or track count | ✅ Working |
+| Home dashboard (most-played songs grid) | ✅ Working |
+| Home / Artists / Albums view toggle, sortable by name or track count | ✅ Working |
 | Artist list → album grid → album detail (Material 3) | ✅ Working |
+| Multi-disc releases merged into one album | ✅ Working |
 | Automatic album covers (embedded art + iTunes fallback) | ✅ Working |
 | Playback (Media3/ExoPlayer, background, notification) | ✅ Working |
 | Mini-player + full-screen player (expand/collapse, seek, skip) | ✅ Working |

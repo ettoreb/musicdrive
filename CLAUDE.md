@@ -503,12 +503,78 @@ Artists/Albums view toggle and album sort implemented:
   6, ... confirmed against the actual per-album track counts); the chosen
   tab and sort mode both survive a force-stop + relaunch.
 
+Multi-disc release merging implemented:
+- data/drive/DriveRepository.kt's collectAlbumFolders: a subfolder is now
+  treated as one disc of its PARENT's release, not its own album, when its
+  own recursion bottomed out immediately (it directly held audio) AND its
+  name matches `^(cd|disc)\s*\d+` (case-insensitive) — covers "CD1",
+  "CD 2", "Disc 1", "Disc 1 - Sounds Of The Universe", the real naming
+  conventions seen in the test library. The parent folder becomes the
+  merged DriveAlbum (release name, e.g. "Sounds Of The Universe (Deluxe
+  Edition)"), with AlbumFolderWithArtist.sourceFolderIds (new field)
+  listing every disc's physical folder id in disc-number order.
+- listLibraryAlbums: the Drive query's parentsClause now covers every
+  sourceFolderId, not just one id per album; tracks are grouped by their
+  REAL physical parent folder id first, then concatenated back per album
+  in sourceFolderIds order (disc 1's tracks before disc 2's) rather than
+  re-sorted by name globally — a plain per-album name-sort would have
+  interleaved same-numbered tracks across discs (both discs' "01 -
+  ...mp3") instead of keeping each disc's running order intact.
+- Verified live on the real Depeche Mode/U2 library (pm clear +
+  relaunch to force a fresh scan): Depeche Mode went from 24 to 21 albums
+  and U2 from 20 to 16 (fewer albums, same total track count - 236 and
+  224 respectively - confirming tracks were merged, not lost); no more
+  standalone "CD1"/"CD2" entries in the album grid; "Sounds Of The
+  Universe (Deluxe Edition)" now shows as one 33-track album whose track
+  list correctly restarts at "01 ..." partway through (disc 2 boundary)
+  instead of interleaving with disc 1 alphabetically.
+
+Home dashboard (most-played songs grid) implemented:
+- data/local/room/PlayCountEntity.kt + PlayCountDao.kt: one row per
+  trackId (playCount, lastPlayedAt), incremented via a raw upsert query
+  (`INSERT ... ON CONFLICT(trackId) DO UPDATE SET playCount = playCount +
+  1`) rather than a read-then-write, so concurrent increments can't race.
+  observeTopTracks(limit) is a Flow, ordered by playCount desc then
+  lastPlayedAt desc, so ties favor the most recently played. Bumped
+  MusicDriveDatabase to version 3 (still fallbackToDestructiveMigration,
+  per the existing pre-release-schema policy).
+- data/PlayStatsRepository.kt: thin wrapper (observeTopTracks/recordPlay)
+  over the DAO, same pattern as LyricsRepository/DownloadTracker.
+- MainActivity records a play via a Player.Listener on the MediaController
+  (onMediaItemTransition -> recordPlay(mediaItem.mediaId)) — fires on
+  manual track taps, skip next/previous, and natural auto-advance to the
+  next queued track alike. This is a simple "counts every transition"
+  policy, not scrobble-grade (a 2-second skip counts the same as a full
+  listen) - acceptable for a personal most-played dashboard, not aiming
+  for Last.fm-level precision.
+- ui/HomeScreen.kt: LazyVerticalGrid of HomeGridItem (album + track +
+  track's index within that album + play count), same tile look as the
+  album grid (art via the existing resolveArt, placeholder color/initial
+  fallback). Tapping a tile calls onPlayAlbum(album, trackIndex) — same
+  "play the whole album from here" behavior as tapping a track in
+  AlbumDetailScreen, not a bare single-track queue.
+- MainActivity builds the trackId -> (album, track, index) lookup from
+  the currently loaded library (current.albums) and maps
+  playStatsRepository's top-N play counts through it, dropping any
+  trackId no longer present — avoids a second Room join/relation just to
+  resolve track metadata that's already sitting in memory.
+- data/local/SettingsRepository.kt: LibraryViewMode gained HOME (now the
+  DEFAULT, ahead of ARTISTS) alongside ARTISTS/ALBUMS; MainActivity's
+  LibraryRoute/LibraryTopBar extended with a third "Home" tab, first in
+  the row, matching YouTube Music's Home-first tab order.
+- Verified live end to end on the emulator: played 3 different tracks
+  from the same album a controlled number of times (3x/2x/1x, confirmed
+  via `adb shell run-as ... sqlite3 musicdrive.db "SELECT trackId,
+  playCount FROM PlayCountEntity"` showing exactly 3/2/1), reopened the
+  app to confirm Home is now the default tab, and confirmed the grid
+  shows exactly those 3 tracks in the correct 3/2/1 order with real album
+  art; tapping the #2 tile correctly started playback at that exact track
+  (confirmed via dumpsys media_session's active item id) within its whole
+  album's queue.
+
 ## Next steps
 1. Android Auto: MediaLibraryService browsing tree + automotive app
    descriptor
-2. (not user-ordered, opportunistic) Merge multi-disc release folders
-   (CD1/CD2/Disc N) into a single album instead of showing each disc as
-   its own album — see "Album/artist view" above
 
 ## Reference
 - androidx/media demo apps are the canonical reference for DownloadManager

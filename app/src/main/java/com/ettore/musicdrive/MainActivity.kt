@@ -29,6 +29,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -42,6 +43,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
+import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
@@ -51,6 +53,7 @@ import com.ettore.musicdrive.auth.GoogleSignInManager
 import com.ettore.musicdrive.auth.SignInResult
 import com.ettore.musicdrive.data.LibraryRepository
 import com.ettore.musicdrive.data.LyricsRepository
+import com.ettore.musicdrive.data.PlayStatsRepository
 import com.ettore.musicdrive.data.drive.AlbumArtRepository
 import com.ettore.musicdrive.data.drive.DriveAlbum
 import com.ettore.musicdrive.data.drive.DriveRepository
@@ -66,6 +69,8 @@ import com.ettore.musicdrive.ui.ArtistListScreen
 import com.ettore.musicdrive.ui.ArtistSummary
 import com.ettore.musicdrive.ui.FolderPickerScreen
 import com.ettore.musicdrive.ui.FullPlayerScreen
+import com.ettore.musicdrive.ui.HomeGridItem
+import com.ettore.musicdrive.ui.HomeScreen
 import com.ettore.musicdrive.ui.LibraryScreen
 import com.ettore.musicdrive.ui.LyricsScreen
 import com.ettore.musicdrive.ui.MiniPlayerBar
@@ -93,6 +98,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var settingsRepository: SettingsRepository
     private lateinit var lyricsRepository: LyricsRepository
     private lateinit var downloadTracker: DownloadTracker
+    private lateinit var playStatsRepository: PlayStatsRepository
     private lateinit var controllerFuture: ListenableFuture<MediaController>
 
     // Compose-observable so the UI recomposes once the controller finishes connecting.
@@ -120,6 +126,7 @@ class MainActivity : ComponentActivity() {
         settingsRepository = app.settingsRepository
         lyricsRepository = LyricsRepository(app.database.lyricsDao())
         downloadTracker = app.downloadTracker
+        playStatsRepository = PlayStatsRepository(app.database.playCountDao())
 
         val sessionToken = SessionToken(this, ComponentName(this, MusicPlaybackService::class.java))
         controllerFuture = MediaController.Builder(this, sessionToken).buildAsync()
@@ -140,6 +147,7 @@ class MainActivity : ComponentActivity() {
                     settingsRepository = settingsRepository,
                     lyricsRepository = lyricsRepository,
                     downloadTracker = downloadTracker,
+                    playStatsRepository = playStatsRepository,
                     mediaController = mediaController,
                     onPlayAlbum = ::playAlbum,
                 )
@@ -182,11 +190,14 @@ private sealed class AppState {
 }
 
 private sealed class LibraryRoute {
+    data object Home : LibraryRoute()
     data object Artists : LibraryRoute()
     data object Albums : LibraryRoute()
     data class ArtistAlbums(val artist: ArtistSummary) : LibraryRoute()
     data class AlbumDetail(val album: DriveAlbum, val backTo: LibraryRoute) : LibraryRoute()
 }
+
+private const val HOME_GRID_LIMIT = 12
 
 @Composable
 private fun MusicDriveApp(
@@ -197,29 +208,33 @@ private fun MusicDriveApp(
     settingsRepository: SettingsRepository,
     lyricsRepository: LyricsRepository,
     downloadTracker: DownloadTracker,
+    playStatsRepository: PlayStatsRepository,
     mediaController: MediaController?,
     onPlayAlbum: (DriveAlbum, startIndex: Int) -> Unit,
 ) {
     var state by remember { mutableStateOf<AppState>(AppState.Loading) }
-    var libraryRoute by remember { mutableStateOf<LibraryRoute>(LibraryRoute.Artists) }
+    var libraryRoute by remember { mutableStateOf<LibraryRoute>(LibraryRoute.Home) }
     var isPlayerExpanded by remember { mutableStateOf(false) }
     var isQueueVisible by remember { mutableStateOf(false) }
     var isLyricsVisible by remember { mutableStateOf(false) }
     var isSettingsVisible by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
+    fun topLevelRouteFor(mode: LibraryViewMode): LibraryRoute = when (mode) {
+        LibraryViewMode.HOME -> LibraryRoute.Home
+        LibraryViewMode.ARTISTS -> LibraryRoute.Artists
+        LibraryViewMode.ALBUMS -> LibraryRoute.Albums
+    }
+
     fun selectTopLevelView(mode: LibraryViewMode) {
-        libraryRoute = if (mode == LibraryViewMode.ALBUMS) LibraryRoute.Albums else LibraryRoute.Artists
+        libraryRoute = topLevelRouteFor(mode)
         scope.launch { settingsRepository.setLibraryViewMode(mode) }
     }
 
     suspend fun loadLibrary(rootFolderId: String, rootFolderName: String?) {
         state = AppState.Loading
-        // Reopen on whichever top-level tab (Artists/Albums) the user had open last.
-        libraryRoute = when (settingsRepository.libraryViewMode.first()) {
-            LibraryViewMode.ALBUMS -> LibraryRoute.Albums
-            LibraryViewMode.ARTISTS -> LibraryRoute.Artists
-        }
+        // Reopen on whichever top-level tab (Home/Artists/Albums) the user had open last.
+        libraryRoute = topLevelRouteFor(settingsRepository.libraryViewMode.first())
         // Emits cached data first (if any) for an instant browse, then again once the
         // live Drive fetch lands - the route reset above only happens once, up front,
         // so a background refresh mid-browse doesn't kick the user out of an album.
@@ -273,6 +288,22 @@ private fun MusicDriveApp(
     val cacheLimitBytes by settingsRepository.cacheLimitBytes.collectAsState(initial = SettingsRepository.DEFAULT_CACHE_LIMIT_BYTES)
     val themeMode by settingsRepository.themeMode.collectAsState(initial = ThemeMode.SYSTEM)
     val albumSortMode by settingsRepository.albumSortMode.collectAsState(initial = AlbumSortMode.NAME)
+    val topTrackCounts by playStatsRepository.observeTopTracks(HOME_GRID_LIMIT).collectAsState(initial = emptyList())
+
+    // Counts a "play" on every track transition (manual skip, auto-advance, or the
+    // initial track of a newly built playlist all count) - simple and good enough
+    // for a personal most-played dashboard, not scrobble-grade precision.
+    DisposableEffect(mediaController) {
+        val controller = mediaController ?: return@DisposableEffect onDispose {}
+        val listener = object : Player.Listener {
+            override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+                val trackId = mediaItem?.mediaId ?: return
+                scope.launch { playStatsRepository.recordPlay(trackId) }
+            }
+        }
+        controller.addListener(listener)
+        onDispose { controller.removeListener(listener) }
+    }
 
     Box(modifier = Modifier.fillMaxSize()) {
         Scaffold { innerPadding ->
@@ -324,6 +355,41 @@ private fun MusicDriveApp(
                         )
 
                         is AppState.LibraryLoaded -> when (val route = libraryRoute) {
+                            is LibraryRoute.Home -> Column(modifier = Modifier.fillMaxSize()) {
+                                LibraryTopBar(
+                                    folderLabel = "Change library folder" +
+                                        (current.libraryFolderName?.let { " (currently \"$it\")" } ?: ""),
+                                    onChangeFolder = { state = AppState.PickingFolder },
+                                    onOpenSettings = { isSettingsVisible = true },
+                                    selectedView = LibraryViewMode.HOME,
+                                    onSelectView = ::selectTopLevelView,
+                                )
+                                // trackId -> (its album, its index within that album) so a
+                                // Home tile can resume playback the same way AlbumDetailScreen
+                                // does (play the whole album starting from that track).
+                                val trackLocations = remember(current.albums) {
+                                    current.albums.flatMap { album ->
+                                        album.tracks.mapIndexed { index, track -> track.id to Triple(album, track, index) }
+                                    }.toMap()
+                                }
+                                val homeItems = remember(topTrackCounts, trackLocations) {
+                                    topTrackCounts.mapNotNull { playCount ->
+                                        trackLocations[playCount.trackId]?.let { (album, track, index) ->
+                                            HomeGridItem(album, track, index, playCount.playCount)
+                                        }
+                                    }
+                                }
+                                HomeScreen(
+                                    topTracks = homeItems,
+                                    onTrackClick = { item ->
+                                        onPlayAlbum(item.album, item.trackIndex)
+                                        isPlayerExpanded = true
+                                    },
+                                    resolveArt = albumArtRepository::resolveArt,
+                                    modifier = Modifier.weight(1f),
+                                )
+                            }
+
                             is LibraryRoute.Artists -> Column(modifier = Modifier.fillMaxSize()) {
                                 LibraryTopBar(
                                     folderLabel = "Change library folder" +
@@ -485,6 +551,11 @@ private fun LibraryTopBar(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
+            FilterChip(
+                selected = selectedView == LibraryViewMode.HOME,
+                onClick = { onSelectView(LibraryViewMode.HOME) },
+                label = { Text("Home") },
+            )
             FilterChip(
                 selected = selectedView == LibraryViewMode.ARTISTS,
                 onClick = { onSelectView(LibraryViewMode.ARTISTS) },
