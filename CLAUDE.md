@@ -82,10 +82,9 @@ this file.
   no separate tagging library needed. Fall back to LRCLIB (free, no API key,
   https://lrclib.net, matched by artist/title/duration) when no embedded
   lyrics are found. Cache fetched lyrics in Room keyed by track id.
-- Album covers: same idea — Media3 extracts embedded APIC/FLAC picture frames
-  during extraction, use that first. Fall back to the iTunes Search API
-  (free, no key, matched by album+artist) when no embedded art is found.
-  Cache resolved cover URLs/bitmaps in Room/disk cache keyed by album id.
+- Album covers: implemented — see AlbumArtRepository under Current status.
+  Embedded art via MediaMetadataRetriever, disk-cached in cacheDir (not
+  Room, no DB needed for this). iTunes Search API fallback.
 - Android Auto: extend MusicPlaybackService to MediaLibraryService
   (implement onGetLibraryRoot/onGetChildren over the same Room-cached Drive
   index used by the phone UI), plus an automotive_app_desc.xml declaring
@@ -185,26 +184,49 @@ Material 3 UI pass implemented (library grid, album detail, mini/full player):
   Pause/SkipNext/SkipPrevious aren't in the core icon set, only Play/Back/
   chevrons are — found by a real compile failure, not by reading docs first)
 
-Verified live end to end on the musicdrive_test emulator: library grid shows
-real albums merged across the Artist subfolders, album detail lists real
-tracks, tapping one plays the album and expands the full player with correct
-title/artist/duration/position, collapsing to the mini-player persists it
-across navigating back to the library grid. Silent sign-in, folder picker,
-recursive album discovery, auth'd network fetch, streaming-cache write, and
-the system media notification all still verified working underneath this UI.
+Automatic album covers implemented:
+- data/drive/AlbumArtRepository.kt — resolveArt(album): tries an embedded
+  picture first, via android.media.MediaMetadataRetriever pointed at the
+  album's first track's authenticated Drive URL (setDataSource(uri,
+  headers) with the Bearer token; NOT Media3's MetadataRetriever, the plain
+  framework class is enough and avoids spinning up ExoPlayer machinery just
+  to check for a picture). Found art is written to cacheDir/album_art/
+  {albumId}.jpg so it survives process restarts without needing Room. Falls
+  back to the iTunes Search API (free, no key) when nothing's embedded,
+  querying "{artistHint} {albumName}" for precision. Both paths cached
+  in-memory for the process lifetime too (including a cached "no art found"
+  null, so failures aren't retried every recomposition).
+- DriveAlbum gained artistHint: String? — the album folder's parent folder
+  name (e.g. "Depeche Mode"), threaded through collectAlbumFolders'
+  recursion, used only to sharpen the iTunes query. Null on flatter
+  root/Album layouts.
+- ui/LibraryScreen.kt — AlbumGridItem resolves art lazily per album
+  (LaunchedEffect) and shows a Coil AsyncImage in place of the placeholder
+  tile once resolved.
+- ui/PlayerBar.kt — PlayerUiState gained artworkData: ByteArray?, read
+  directly from controller.mediaMetadata.artworkData (Media3's own
+  extraction from the currently-playing stream, zero extra network calls,
+  same bytes the system notification already used). Decoded to an
+  ImageBitmap once per change and shown in both MiniPlayerBar and
+  FullPlayerScreen in place of their placeholder tiles.
+- Added io.coil-kt.coil3 (coil-compose + coil-network-okhttp, v3.5.0) for
+  loading the File/URL art models into Compose.
+
+Verified live end to end on the musicdrive_test emulator: the library grid
+shows real, correctly-matched cover art for every album (mix of embedded and
+iTunes-resolved), and the full player shows the actual embedded artwork for
+the currently-playing track alongside its real title/artist.
 
 ## Next steps
 1. Lyrics: embedded-tag extraction via Media3, LRCLIB fallback
-2. Automatic album covers: embedded-art extraction via Media3, iTunes Search
-   API fallback (also replaces LibraryScreen/FullPlayerScreen's placeholder
-   tiles with real art)
-3. Android Auto: MediaLibraryService browsing tree + automotive app
+2. Android Auto: MediaLibraryService browsing tree + automotive app
    descriptor
-4. Downloads: Media3 DownloadManager writing into the download cache,
+3. Downloads: Media3 DownloadManager writing into the download cache,
    per-song/per-album, never evicted
-5. Room-cached Drive index (currently every launch re-runs the recursive
-   album search and re-lists tracks)
-6. Queue view (the full player has next/prev but no visible upcoming-tracks
+4. Room-cached Drive index (currently every launch re-runs the recursive
+   album search and re-lists tracks; album art has its own disk cache
+   already, independent of this)
+5. Queue view (the full player has next/prev but no visible upcoming-tracks
    list yet)
 
 ## Reference

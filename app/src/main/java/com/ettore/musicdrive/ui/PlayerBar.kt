@@ -1,5 +1,7 @@
 package com.ettore.musicdrive.ui
 
+import android.graphics.BitmapFactory
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -39,6 +41,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.media3.common.MediaMetadata
@@ -52,8 +57,16 @@ data class PlayerUiState(
     val isPlaying: Boolean = false,
     val positionMs: Long = 0L,
     val durationMs: Long = 0L,
+    /** The current track's embedded artwork, as Media3 already extracted it while decoding the stream. */
+    val artworkData: ByteArray? = null,
 ) {
     val hasTrack: Boolean get() = title.isNotEmpty() || artist.isNotEmpty() || isPlaying
+}
+
+/** Decodes [PlayerUiState.artworkData] once per change, not on every recomposition. */
+@Composable
+private fun rememberArtBitmap(artworkData: ByteArray?): ImageBitmap? = remember(artworkData) {
+    artworkData?.let { bytes -> BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap() }
 }
 
 /** Mirrors a Media3 MediaController's playback state into Compose state, live. */
@@ -72,6 +85,7 @@ fun rememberPlayerUiState(controller: MediaController?): PlayerUiState {
                 isPlaying = controller.isPlaying,
                 positionMs = controller.currentPosition.coerceAtLeast(0),
                 durationMs = controller.duration.coerceAtLeast(0),
+                artworkData = metadata.artworkData,
             )
         }
         refresh()
@@ -106,11 +120,36 @@ fun MiniPlayerBar(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val artBitmap = rememberArtBitmap(state.artworkData)
+
     Surface(modifier = modifier.fillMaxWidth().clickable(onClick = onClick), tonalElevation = 3.dp) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            Box(
+                modifier = Modifier
+                    .size(40.dp)
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(MaterialTheme.colorScheme.primaryContainer),
+                contentAlignment = Alignment.Center,
+            ) {
+                if (artBitmap != null) {
+                    Image(
+                        bitmap = artBitmap,
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                } else {
+                    Text(
+                        state.title.take(1).uppercase().ifBlank { "?" },
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                    )
+                }
+            }
+            Spacer(Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     state.title.ifBlank { "Loading…" },
@@ -148,6 +187,8 @@ fun FullPlayerScreen(
     onCollapse: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val artBitmap = rememberArtBitmap(state.artworkData)
+
     Column(
         modifier = modifier
             .fillMaxSize()
@@ -169,11 +210,20 @@ fun FullPlayerScreen(
                 .background(MaterialTheme.colorScheme.primaryContainer),
             contentAlignment = Alignment.Center,
         ) {
-            Text(
-                state.title.take(1).uppercase().ifBlank { "?" },
-                style = MaterialTheme.typography.displayLarge,
-                color = MaterialTheme.colorScheme.onPrimaryContainer,
-            )
+            if (artBitmap != null) {
+                Image(
+                    bitmap = artBitmap,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            } else {
+                Text(
+                    state.title.take(1).uppercase().ifBlank { "?" },
+                    style = MaterialTheme.typography.displayLarge,
+                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                )
+            }
         }
 
         Spacer(Modifier.height(32.dp))

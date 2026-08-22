@@ -36,6 +36,7 @@ import com.ettore.musicdrive.auth.DriveAuthorizationManager
 import com.ettore.musicdrive.auth.DriveTokenProvider
 import com.ettore.musicdrive.auth.GoogleSignInManager
 import com.ettore.musicdrive.auth.SignInResult
+import com.ettore.musicdrive.data.drive.AlbumArtRepository
 import com.ettore.musicdrive.data.drive.DriveAlbum
 import com.ettore.musicdrive.data.drive.DriveRepository
 import com.ettore.musicdrive.data.local.SettingsRepository
@@ -58,6 +59,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var signInManager: GoogleSignInManager
     private lateinit var driveAuthorizationManager: DriveAuthorizationManager
     private lateinit var driveRepository: DriveRepository
+    private lateinit var albumArtRepository: AlbumArtRepository
     private lateinit var settingsRepository: SettingsRepository
     private lateinit var controllerFuture: ListenableFuture<MediaController>
 
@@ -80,6 +82,7 @@ class MainActivity : ComponentActivity() {
         val app = application as MusicDriveApplication
         app.driveTokenProvider = tokenProvider
         driveRepository = DriveRepository(tokenProvider)
+        albumArtRepository = AlbumArtRepository(this, tokenProvider)
         settingsRepository = app.settingsRepository
 
         val sessionToken = SessionToken(this, ComponentName(this, MusicPlaybackService::class.java))
@@ -95,6 +98,7 @@ class MainActivity : ComponentActivity() {
                 MusicDriveApp(
                     signInManager = signInManager,
                     driveRepository = driveRepository,
+                    albumArtRepository = albumArtRepository,
                     settingsRepository = settingsRepository,
                     mediaController = mediaController,
                     onPlayAlbum = ::playAlbum,
@@ -139,6 +143,7 @@ private sealed class LibraryRoute {
 private fun MusicDriveApp(
     signInManager: GoogleSignInManager,
     driveRepository: DriveRepository,
+    albumArtRepository: AlbumArtRepository,
     settingsRepository: SettingsRepository,
     mediaController: MediaController?,
     onPlayAlbum: (DriveAlbum, startIndex: Int) -> Unit,
@@ -256,6 +261,7 @@ private fun MusicDriveApp(
                                 LibraryScreen(
                                     albums = current.albums,
                                     onAlbumClick = { libraryRoute = LibraryRoute.AlbumDetail(it) },
+                                    resolveArt = albumArtRepository::resolveArt,
                                     modifier = Modifier.weight(1f),
                                 )
                             }

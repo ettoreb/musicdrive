@@ -32,8 +32,12 @@ data class DriveFolder(
 data class DriveAlbum(
     val id: String,
     val name: String,
+    /** The album folder's parent folder name, when the library nests as root/Artist/Album. Null for a flatter layout. */
+    val artistHint: String?,
     val tracks: List<DriveAudioFile>,
 )
+
+private data class AlbumFolderWithParent(val folder: DriveFolder, val parentName: String?)
 
 private fun DriveFile.toDriveAudioFile() = DriveAudioFile(
     id = id,
@@ -106,15 +110,18 @@ class DriveRepository(private val tokenProvider: DriveTokenProvider) {
         drive: Drive,
         folderId: String,
         folderName: String?,
-    ): List<DriveFolder> = coroutineScope {
+        parentName: String?,
+    ): List<AlbumFolderWithParent> = coroutineScope {
         if (folderHasAudioFiles(drive, folderId)) {
             val name = folderName ?: withContext(Dispatchers.IO) {
                 drive.files().get(folderId).setFields("name").execute().name
             }
-            listOf(DriveFolder(folderId, name))
+            listOf(AlbumFolderWithParent(DriveFolder(folderId, name), parentName))
         } else {
             listFoldersRaw(drive, folderId)
-                .map { subfolder -> async { collectAlbumFolders(drive, subfolder.id, subfolder.name) } }
+                .map { subfolder ->
+                    async { collectAlbumFolders(drive, subfolder.id, subfolder.name, parentName = folderName) }
+                }
                 .awaitAll()
                 .flatten()
         }
@@ -131,10 +138,10 @@ class DriveRepository(private val tokenProvider: DriveTokenProvider) {
      * via the track's parent folder id.
      */
     suspend fun listLibraryAlbums(rootFolderId: String): Result<List<DriveAlbum>> = withDrive { drive ->
-        val albumFolders = collectAlbumFolders(drive, rootFolderId, folderName = null)
+        val albumFolders = collectAlbumFolders(drive, rootFolderId, folderName = null, parentName = null)
         if (albumFolders.isEmpty()) return@withDrive emptyList()
 
-        val parentsClause = albumFolders.joinToString(separator = " or ") { "'${it.id}' in parents" }
+        val parentsClause = albumFolders.joinToString(separator = " or ") { "'${it.folder.id}' in parents" }
         val tracks = drive.files().list()
             .setQ("($parentsClause) and mimeType contains 'audio/' and trashed = false")
             .setFields("files(id, name, mimeType, size, parents)")
@@ -145,11 +152,12 @@ class DriveRepository(private val tokenProvider: DriveTokenProvider) {
 
         val tracksByAlbumFolderId = tracks.groupBy { it.parents?.firstOrNull() }
         albumFolders
-            .map { folder ->
+            .map { entry ->
                 DriveAlbum(
-                    id = folder.id,
-                    name = folder.name,
-                    tracks = tracksByAlbumFolderId[folder.id].orEmpty().map { it.toDriveAudioFile() },
+                    id = entry.folder.id,
+                    name = entry.folder.name,
+                    artistHint = entry.parentName,
+                    tracks = tracksByAlbumFolderId[entry.folder.id].orEmpty().map { it.toDriveAudioFile() },
                 )
             }
             .filter { it.tracks.isNotEmpty() }

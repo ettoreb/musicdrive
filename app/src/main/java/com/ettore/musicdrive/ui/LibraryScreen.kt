@@ -17,12 +17,19 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import coil3.compose.AsyncImage
 import com.ettore.musicdrive.data.drive.DriveAlbum
 import kotlin.math.abs
 
@@ -41,6 +48,7 @@ private fun placeholderColorFor(name: String): Color {
 fun LibraryScreen(
     albums: List<DriveAlbum>,
     onAlbumClick: (DriveAlbum) -> Unit,
+    resolveArt: suspend (DriveAlbum) -> Any?,
     modifier: Modifier = Modifier,
 ) {
     if (albums.isEmpty()) {
@@ -58,13 +66,16 @@ fun LibraryScreen(
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         items(albums, key = { it.id }) { album ->
-            AlbumGridItem(album = album, onClick = { onAlbumClick(album) })
+            AlbumGridItem(album = album, onClick = { onAlbumClick(album) }, resolveArt = resolveArt)
         }
     }
 }
 
 @Composable
-private fun AlbumGridItem(album: DriveAlbum, onClick: () -> Unit) {
+private fun AlbumGridItem(album: DriveAlbum, onClick: () -> Unit, resolveArt: suspend (DriveAlbum) -> Any?) {
+    var art by remember(album.id) { mutableStateOf<Any?>(null) }
+    LaunchedEffect(album.id) { art = resolveArt(album) }
+
     Column(modifier = Modifier.fillMaxWidth().clickable(onClick = onClick)) {
         Box(
             modifier = Modifier
@@ -74,11 +85,20 @@ private fun AlbumGridItem(album: DriveAlbum, onClick: () -> Unit) {
                 .background(placeholderColorFor(album.name)),
             contentAlignment = Alignment.Center,
         ) {
-            Text(
-                album.name.take(1).uppercase(),
-                style = MaterialTheme.typography.displayMedium,
-                color = Color.White,
-            )
+            if (art != null) {
+                AsyncImage(
+                    model = art,
+                    contentDescription = album.name,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            } else {
+                Text(
+                    album.name.take(1).uppercase(),
+                    style = MaterialTheme.typography.displayMedium,
+                    color = Color.White,
+                )
+            }
         }
         Text(
             album.name,
