@@ -32,8 +32,8 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
+import com.ettore.musicdrive.auth.ContextDriveAuthorizer
 import com.ettore.musicdrive.auth.DriveAuthorizationManager
-import com.ettore.musicdrive.auth.DriveTokenProvider
 import com.ettore.musicdrive.auth.GoogleSignInManager
 import com.ettore.musicdrive.auth.SignInResult
 import com.ettore.musicdrive.data.drive.AlbumArtRepository
@@ -78,9 +78,10 @@ class MainActivity : ComponentActivity() {
 
         signInManager = GoogleSignInManager(this)
         driveAuthorizationManager = DriveAuthorizationManager(this)
-        val tokenProvider = DriveTokenProvider(driveAuthorizationManager)
         val app = application as MusicDriveApplication
-        app.driveTokenProvider = tokenProvider
+        // Shared with MusicPlaybackService; upgrade it to show consent UI while we're alive.
+        val tokenProvider = app.driveTokenProvider
+        tokenProvider.setAuthorizer(driveAuthorizationManager)
         driveRepository = DriveRepository(tokenProvider)
         albumArtRepository = AlbumArtRepository(this, tokenProvider)
         settingsRepository = app.settingsRepository
@@ -122,6 +123,9 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         MediaController.releaseFuture(controllerFuture)
+        // Drop the activity-bound authorizer so a later token refresh (e.g. from the
+        // playback service after this activity is gone) doesn't hold a dead Activity.
+        (application as MusicDriveApplication).driveTokenProvider.setAuthorizer(ContextDriveAuthorizer(applicationContext))
         super.onDestroy()
     }
 }

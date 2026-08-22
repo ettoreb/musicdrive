@@ -33,7 +33,9 @@ lyrics, and Android Auto are still to come.
 - **Playback**: Media3/ExoPlayer with two separate caches — an
   auto-managed streaming cache with a user-configurable size cap (LRU
   eviction), and a separate permanent cache for explicit downloads that are
-  never evicted.
+  never evicted. Tuned for fast tap-to-audio start, gapless transitions
+  between an album's tracks, and survives the OS killing and restarting the
+  app process mid-playback.
 - **Auth**: Credential Manager for sign-in, the Identity API's
   `AuthorizationClient` for the separate Drive `drive.readonly` scope
   consent.

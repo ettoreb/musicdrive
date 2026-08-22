@@ -137,9 +137,8 @@ Playback foundation implemented:
 - playback/AdjustableLruEvictor.kt — CacheEvictor with a live-adjustable maxBytes
 - MusicDriveApplication.kt — owns the two SimpleCache singletons (streaming:
   cacheDir + AdjustableLruEvictor; download: filesDir + NoOpCacheEvictor) and
-  a nullable driveTokenProvider set by MainActivity once it starts (see the
-  known limitation noted in that file — cold-starting playback before
-  MainActivity has ever run isn't handled yet)
+  a driveTokenProvider that's non-null from Application.onCreate() onward
+  (see "Playback optimizations" below — this used to be nullable/cold-start-unsafe)
 - playback/DriveDataSourceFactory.kt — AuthenticatingHttpDataSource injects a
   fresh Bearer token per request and retries once on 401; layered
   CacheDataSource.Factory chain (download cache, read-only here -> streaming
@@ -217,27 +216,65 @@ shows real, correctly-matched cover art for every album (mix of embedded and
 iTunes-resolved), and the full player shows the actual embedded artwork for
 the currently-playing track alongside its real title/artist.
 
+Playback optimizations implemented (buffering latency, cold-start reliability,
+gapless — the three things "optimize playback" broke down into):
+- playback/MusicPlaybackService.kt — custom DefaultLoadControl with
+  bufferForPlaybackMs=1_000 / bufferForPlaybackAfterRebufferMs=2_000 (defaults
+  are ~2_500/5_000, tuned for adaptive streaming; these are plain progressive
+  HTTP MP3s, so that's needless tap-to-audio latency). Measured on the
+  emulator via logcat: BUFFERING to PLAYING in ~450ms.
+- Cold-start reliability: MusicPlaybackService is a START_STICKY
+  MediaSessionService, so the OS can restart it directly after a process
+  death (e.g. low-memory kill during playback) WITHOUT MainActivity ever
+  running first — the old nullable driveTokenProvider meant that path just
+  stopSelf()'d, silently failing to resume. Fixed by splitting auth into a
+  new `DriveAuthorizer` interface:
+  - auth/DriveAuthorizationManager.kt now implements it (unchanged behavior,
+    still needs a ComponentActivity for the one-time consent UI)
+  - auth/ContextDriveAuthorizer.kt is new: Identity.getAuthorizationClient
+    DOES have a plain-Context overload (confirmed by compiling, not by
+    trusting docs), so this can silently mint a fresh token with no
+    Activity — it just can't show a consent UI if one's ever needed
+    (hasResolution() true), which only happens on first run or revoked
+    access; open the app in that case.
+  - auth/DriveTokenProvider.kt now holds a mutable authorizer
+    (setAuthorizer()) instead of a fixed one
+  - MusicDriveApplication.onCreate() eagerly creates driveTokenProvider with
+    a ContextDriveAuthorizer — always available, no longer nullable.
+    MainActivity upgrades it to its ActivityDriveAuthorizationManager while
+    alive and swaps back to a Context one in onDestroy so a later refresh
+    never holds a dead Activity.
+  - Verified for real: `adb root` + `kill -9 <pid>` while a track was
+    playing → Android auto-restarted just MusicPlaybackService (confirmed
+    via `dumpsys activity services`, no MainActivity in logcat) →
+    ExoPlayerImpl/MediaSessionImpl both initialized successfully with no
+    crash, proving the fix actually closes the gap rather than just
+    compiling.
+- Gapless: no code change needed — Media3 already plays consecutive
+  MediaItems in a playlist back-to-back (playAlbum's setMediaItems call
+  already builds the whole album as one playlist). Verified by seeking near
+  the end of a track and confirming automatic advance to the next track's
+  start with no user action and no stutter in dumpsys media_session. True
+  crossfade (DSP-blended overlap between tracks) is a distinct, much bigger
+  feature — not implemented, flag separately if wanted.
+
 ## Next steps
 Reprioritized 2026-08-22 per explicit user ordering (was: lyrics, Android
-Auto, downloads, Room index, queue view).
-1. Optimize playback — scope not yet defined; likely candidates: the
-   cold-start gap (driveTokenProvider is null until MainActivity has run
-   once, see MusicDriveApplication.kt), startup/buffering latency, and
-   general playback resilience. Clarify exact scope with the user before
-   starting.
-2. Room-cached Drive index (currently every launch re-runs the recursive
+Auto, downloads, Room index, queue view). Playback optimization (previously
+#1) is now done — see above.
+1. Room-cached Drive index (currently every launch re-runs the recursive
    album search and re-lists tracks; album art has its own disk cache
    already, independent of this) — also what the album/artist view below
    will want, to avoid re-deriving the artist grouping every launch
-3. Album/artist short view: a browse-by-artist layer above LibraryScreen
+2. Album/artist short view: a browse-by-artist layer above LibraryScreen
    (artist list -> that artist's albums -> album detail), using the
    artistHint AlbumArtRepository already derives from folder structure
-4. Queue view (the full player has next/prev but no visible upcoming-tracks
+3. Queue view (the full player has next/prev but no visible upcoming-tracks
    list yet)
-5. Lyrics: embedded-tag extraction via Media3, LRCLIB fallback
-6. Downloads: Media3 DownloadManager writing into the download cache,
+4. Lyrics: embedded-tag extraction via Media3, LRCLIB fallback
+5. Downloads: Media3 DownloadManager writing into the download cache,
    per-song/per-album, never evicted
-7. Android Auto: MediaLibraryService browsing tree + automotive app
+6. Android Auto: MediaLibraryService browsing tree + automotive app
    descriptor
 
 ## Reference

@@ -5,6 +5,7 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.database.StandaloneDatabaseProvider
 import androidx.media3.datasource.cache.NoOpCacheEvictor
 import androidx.media3.datasource.cache.SimpleCache
+import com.ettore.musicdrive.auth.ContextDriveAuthorizer
 import com.ettore.musicdrive.auth.DriveTokenProvider
 import com.ettore.musicdrive.data.local.SettingsRepository
 import com.ettore.musicdrive.playback.AdjustableLruEvictor
@@ -26,13 +27,16 @@ class MusicDriveApplication : Application() {
         private set
 
     /**
-     * Set by MainActivity once it constructs its (activity-bound) auth chain.
-     * MusicPlaybackService reads this to authenticate Drive requests. Null
-     * until MainActivity has run at least once in this process lifetime —
-     * cold-starting playback purely from a notification/Android Auto after
-     * process death isn't handled yet, see CLAUDE.md.
+     * Always available from process start, backed by a Context-only
+     * ContextDriveAuthorizer so MusicPlaybackService can authenticate even if
+     * the OS restarts it directly after process death (it returns
+     * START_STICKY) without MainActivity having run first. MainActivity
+     * upgrades this to an Activity-bound authorizer while it's alive, so
+     * interactive consent can still be shown the rare times it's needed
+     * (first run, revoked access), and swaps back on destroy.
      */
-    var driveTokenProvider: DriveTokenProvider? = null
+    lateinit var driveTokenProvider: DriveTokenProvider
+        private set
 
     /** Auto-managed, evictable cache for streamed playback. Bounded by a user-configurable size cap. */
     lateinit var streamingCache: SimpleCache
@@ -48,6 +52,7 @@ class MusicDriveApplication : Application() {
         super.onCreate()
 
         settingsRepository = SettingsRepository(this)
+        driveTokenProvider = DriveTokenProvider(ContextDriveAuthorizer(this))
         val databaseProvider = StandaloneDatabaseProvider(this)
 
         val streamingEvictor = AdjustableLruEvictor(SettingsRepository.DEFAULT_CACHE_LIMIT_BYTES)

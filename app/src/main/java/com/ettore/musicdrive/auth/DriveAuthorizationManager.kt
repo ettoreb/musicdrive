@@ -22,6 +22,10 @@ sealed class DriveAuthResult {
     data class Failure(val message: String, val cause: Throwable? = null) : DriveAuthResult()
 }
 
+interface DriveAuthorizer {
+    suspend fun authorize(): DriveAuthResult
+}
+
 /**
  * Requests the Drive readonly scope via Identity.getAuthorizationClient. This is
  * separate from [GoogleSignInManager]: sign-in proves identity, authorization
@@ -30,7 +34,7 @@ sealed class DriveAuthResult {
  * Must be constructed in the activity's onCreate (before STARTED), because
  * registerForActivityResult requires it.
  */
-class DriveAuthorizationManager(private val activity: ComponentActivity) {
+class DriveAuthorizationManager(private val activity: ComponentActivity) : DriveAuthorizer {
 
     private val authorizationClient = Identity.getAuthorizationClient(activity)
     private var pendingContinuation: CancellableContinuation<DriveAuthResult>? = null
@@ -62,7 +66,7 @@ class DriveAuthorizationManager(private val activity: ComponentActivity) {
      * Requests (or silently renews) the drive.readonly access token. Suspends
      * until the user resolves the consent screen, if one is shown.
      */
-    suspend fun authorize(): DriveAuthResult {
+    override suspend fun authorize(): DriveAuthResult {
         val request = AuthorizationRequest.builder()
             .setRequestedScopes(listOf(Scope(DRIVE_READONLY_SCOPE)))
             .build()
