@@ -152,37 +152,60 @@ Playback foundation implemented:
 Music folder picker implemented:
 - ui/FolderPickerScreen.kt — navigable Drive folder browser (path stack,
   Up button, "Use ... as library folder"), backed by DriveRepository.listFolders
-- data/drive/DriveRepository.kt — listLibraryAudioFiles(rootFolderId) does
-  the depth-first album search described above, then one combined query for
-  every found album's tracks
 - SettingsRepository.libraryRootFolderId (DataStore key
   library_root_folder_id) persists the choice across launches
 
-MainActivity: launch attempts silent sign-in first (Loading state, no button
-flash); on success, if no library root is set yet it shows FolderPickerScreen,
-otherwise it loads listLibraryAudioFiles(rootId) straight away. A "Change
-library folder" row re-opens the picker. Each track row is tappable, building
-a MediaItem and playing it through a MediaController bound to
-MusicPlaybackService. `./gradlew assembleDebug` succeeds, and the FULL chain
-— silent sign-in, folder picker browsing real Drive folders, recursive album
-discovery through an actual root/Artist/Album layout, tap-to-play, auth'd
-network fetch, streaming-cache write, MediaCodec decode, and the system media
-notification with embedded album art — has been verified live on the
-musicdrive_test emulator. Still the tap-a-row-in-a-LazyColumn smoke-test
-screen, not real UI yet.
+Material 3 UI pass implemented (library grid, album detail, mini/full player):
+- data/drive/DriveRepository.kt — listLibraryAlbums(rootFolderId) replaces
+  the old flat file list: does the depth-first album search, then one
+  combined query for every found album's tracks (with a `parents` field so
+  tracks bucket back to their album), returns List<DriveAlbum>
+- ui/LibraryScreen.kt — LazyVerticalGrid of albums, placeholder-color tile
+  with the album's initial (real covers are a later roadmap item), name,
+  track count
+- ui/AlbumDetailScreen.kt — back button + album name header, numbered track
+  list; tapping a track plays the WHOLE album from that index via
+  controller.setMediaItems(...), not just the one file, so next/prev work
+- ui/PlayerBar.kt — PlayerUiState + rememberPlayerUiState(controller):
+  mirrors a MediaController's Player.Listener callbacks (metadata/isPlaying/
+  playbackState) into Compose state, plus a 500ms polling LaunchedEffect for
+  position while playing. MiniPlayerBar (bottom bar, tap to expand) and
+  FullPlayerScreen (placeholder art, title/artist, seek Slider, play/pause/
+  skip, collapse chevron) both read title/artist straight from the
+  controller's live MediaMetadata — same ID3 data Media3 already extracts
+  from the stream, no separate parsing needed.
+- MainActivity: mediaController is now `by mutableStateOf` (Compose-observable,
+  was a plain var) so the UI reacts once it connects; playAlbum(album,
+  startIndex) replaced the old single-file playFile(); AppState/LibraryRoute
+  sealed classes drive navigation (SignedOut/Loading/PickingFolder/Error/
+  LibraryLoaded, with Albums/AlbumDetail as a sub-route). Mini-player is a
+  persistent row under the main content, independent of which library route
+  is showing; full player is a fillMaxSize overlay above the whole Scaffold.
+- Needed androidx.compose.material:material-icons-extended (NOT -core:
+  Pause/SkipNext/SkipPrevious aren't in the core icon set, only Play/Back/
+  chevrons are — found by a real compile failure, not by reading docs first)
+
+Verified live end to end on the musicdrive_test emulator: library grid shows
+real albums merged across the Artist subfolders, album detail lists real
+tracks, tapping one plays the album and expands the full player with correct
+title/artist/duration/position, collapsing to the mini-player persists it
+across navigating back to the library grid. Silent sign-in, folder picker,
+recursive album discovery, auth'd network fetch, streaming-cache write, and
+the system media notification all still verified working underneath this UI.
 
 ## Next steps
-1. Material 3 UI pass: library grid, album detail view, mini-player + full
-   player (YouTube Music-style layout, not visual clone)
-2. Lyrics: embedded-tag extraction via Media3, LRCLIB fallback
-3. Automatic album covers: embedded-art extraction via Media3, iTunes Search
-   API fallback
-4. Android Auto: MediaLibraryService browsing tree + automotive app
+1. Lyrics: embedded-tag extraction via Media3, LRCLIB fallback
+2. Automatic album covers: embedded-art extraction via Media3, iTunes Search
+   API fallback (also replaces LibraryScreen/FullPlayerScreen's placeholder
+   tiles with real art)
+3. Android Auto: MediaLibraryService browsing tree + automotive app
    descriptor
-5. Downloads: Media3 DownloadManager writing into the download cache,
+4. Downloads: Media3 DownloadManager writing into the download cache,
    per-song/per-album, never evicted
-6. Room-cached Drive index (currently every launch re-runs the recursive
+5. Room-cached Drive index (currently every launch re-runs the recursive
    album search and re-lists tracks)
+6. Queue view (the full player has next/prev but no visible upcoming-tracks
+   list yet)
 
 ## Reference
 - androidx/media demo apps are the canonical reference for DownloadManager

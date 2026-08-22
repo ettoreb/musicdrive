@@ -29,6 +29,12 @@ data class DriveFolder(
     val name: String,
 )
 
+data class DriveAlbum(
+    val id: String,
+    val name: String,
+    val tracks: List<DriveAudioFile>,
+)
+
 private fun DriveFile.toDriveAudioFile() = DriveAudioFile(
     id = id,
     name = name,
@@ -68,16 +74,6 @@ class DriveRepository(private val tokenProvider: DriveTokenProvider) {
         }
     }
 
-    /** Smoke test: lists every audio file visible to the signed-in account, ignoring folder structure. */
-    suspend fun listAudioFiles(): Result<List<DriveAudioFile>> = withDrive { drive ->
-        drive.files().list()
-            .setQ("mimeType contains 'audio/' and trashed = false")
-            .setFields("files(id, name, mimeType, size)")
-            .setPageSize(100)
-            .execute()
-            .files.orEmpty().map { it.toDriveAudioFile() }
-    }
-
     private suspend fun listFoldersRaw(drive: Drive, parentId: String): List<DriveFolder> = withContext(Dispatchers.IO) {
         drive.files().list()
             .setQ("'$parentId' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false")
@@ -102,13 +98,23 @@ class DriveRepository(private val tokenProvider: DriveTokenProvider) {
      * assume a fixed depth, since real libraries nest differently (e.g.
      * root/Album vs root/Artist/Album). A folder is an album as soon as it
      * directly contains an audio file; otherwise its subfolders are searched.
+     * [folderName] is only fetched with an extra call in the rare case where
+     * the very first folder passed in already qualifies (its name usually
+     * comes for free from the parent's listFoldersRaw call instead).
      */
-    private suspend fun collectAlbumFolderIds(drive: Drive, folderId: String): List<String> = coroutineScope {
+    private suspend fun collectAlbumFolders(
+        drive: Drive,
+        folderId: String,
+        folderName: String?,
+    ): List<DriveFolder> = coroutineScope {
         if (folderHasAudioFiles(drive, folderId)) {
-            listOf(folderId)
+            val name = folderName ?: withContext(Dispatchers.IO) {
+                drive.files().get(folderId).setFields("name").execute().name
+            }
+            listOf(DriveFolder(folderId, name))
         } else {
             listFoldersRaw(drive, folderId)
-                .map { subfolder -> async { collectAlbumFolderIds(drive, subfolder.id) } }
+                .map { subfolder -> async { collectAlbumFolders(drive, subfolder.id, subfolder.name) } }
                 .awaitAll()
                 .flatten()
         }
@@ -119,20 +125,34 @@ class DriveRepository(private val tokenProvider: DriveTokenProvider) {
         withDrive { drive -> listFoldersRaw(drive, parentId) }
 
     /**
-     * All audio files inside the album folders found under [rootFolderId] (see
-     * [collectAlbumFolderIds]). One traversal to find album folders, then one
-     * combined query for every album's tracks.
+     * Every album (see [collectAlbumFolders]) found under [rootFolderId],
+     * each with its tracks. One traversal to find album folders, then one
+     * combined query for every album's tracks, bucketed back to their album
+     * via the track's parent folder id.
      */
-    suspend fun listLibraryAudioFiles(rootFolderId: String): Result<List<DriveAudioFile>> = withDrive { drive ->
-        val albumFolderIds = collectAlbumFolderIds(drive, rootFolderId)
-        if (albumFolderIds.isEmpty()) return@withDrive emptyList()
+    suspend fun listLibraryAlbums(rootFolderId: String): Result<List<DriveAlbum>> = withDrive { drive ->
+        val albumFolders = collectAlbumFolders(drive, rootFolderId, folderName = null)
+        if (albumFolders.isEmpty()) return@withDrive emptyList()
 
-        val parentsClause = albumFolderIds.joinToString(separator = " or ") { "'$it' in parents" }
-        drive.files().list()
+        val parentsClause = albumFolders.joinToString(separator = " or ") { "'${it.id}' in parents" }
+        val tracks = drive.files().list()
             .setQ("($parentsClause) and mimeType contains 'audio/' and trashed = false")
-            .setFields("files(id, name, mimeType, size)")
+            .setFields("files(id, name, mimeType, size, parents)")
+            .setOrderBy("name")
             .setPageSize(1000)
             .execute()
-            .files.orEmpty().map { it.toDriveAudioFile() }
+            .files.orEmpty()
+
+        val tracksByAlbumFolderId = tracks.groupBy { it.parents?.firstOrNull() }
+        albumFolders
+            .map { folder ->
+                DriveAlbum(
+                    id = folder.id,
+                    name = folder.name,
+                    tracks = tracksByAlbumFolderId[folder.id].orEmpty().map { it.toDriveAudioFile() },
+                )
+            }
+            .filter { it.tracks.isNotEmpty() }
+            .sortedBy { it.name }
     }
 }
