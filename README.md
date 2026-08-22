@@ -1,4 +1,4 @@
-# MusicDrive
+# musicdrive
 
 An Android music player that streams your library straight from Google
 Drive — functionally similar to YouTube Music, not a visual clone. Personal
