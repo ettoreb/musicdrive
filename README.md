@@ -21,6 +21,7 @@ lyrics, and Android Auto are still to come.
 | Playback (Media3/ExoPlayer, background, notification, queue) | ✅ Working |
 | Mini-player + full-screen player (expand/collapse, seek, skip) | ✅ Working |
 | Streaming cache (configurable size, LRU eviction) | ✅ Working (eviction limit not yet user-facing) |
+| Room-cached library index (instant browse on relaunch) | ✅ Working |
 | Permanent offline downloads | ⏳ Planned |
 | Lyrics (embedded + LRCLIB fallback) | ⏳ Planned |
 | Android Auto | ⏳ Planned |
@@ -29,7 +30,8 @@ lyrics, and Android Auto are still to come.
 
 - **Library model**: a Drive folder = an album, found by searching down from
   your chosen root for the first folder(s) that directly contain audio files
-  — so both `root/Album` and `root/Artist/Album` layouts work.
+  — so both `root/Album` and `root/Artist/Album` layouts work. Cached in
+  Room so relaunching browses instantly, refreshing quietly in the background.
 - **Playback**: Media3/ExoPlayer with two separate caches — an
   auto-managed streaming cache with a user-configurable size cap (LRU
   eviction), and a separate permanent cache for explicit downloads that are

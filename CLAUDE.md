@@ -108,12 +108,14 @@ this file.
 
 ## Planned package structure
 com.ettore.musicdrive/
-  auth/       GoogleSignInManager, DriveAuthorizationManager, DriveTokenProvider
-  data/drive/ Drive API wrapper, repository
-  data/local/ Room entities + DAOs, DataStore settings repository
-  playback/   MusicPlaybackService, cache providers, LayeredDataSourceFactory
-  download/   MusicDownloadService, DownloadHolder
-  ui/         library, album detail, player, queue, settings
+  auth/            GoogleSignInManager, DriveAuthorizationManager, DriveTokenProvider
+  data/            LibraryRepository (bridges drive + local)
+  data/drive/      Drive API wrapper, repositories
+  data/local/      DataStore settings repository
+  data/local/room/ Room entities + DAOs (Drive index cache)
+  playback/        MusicPlaybackService, cache providers, LayeredDataSourceFactory
+  download/        MusicDownloadService, DownloadHolder
+  ui/              library, album detail, player, queue, settings
 
 ## Build notes
 - Exclude org.apache.httpcomponents from the Google API client deps or you get
@@ -258,23 +260,49 @@ gapless — the three things "optimize playback" broke down into):
   crossfade (DSP-blended overlap between tracks) is a distinct, much bigger
   feature — not implemented, flag separately if wanted.
 
+Room-cached Drive index implemented:
+- data/local/room/: AlbumEntity (id, name, artistHint, rootFolderId),
+  TrackEntity (id, albumId, name, mimeType, sizeBytes), AlbumWithTracks
+  (@Relation), LibraryDao (replaceLibrary/clearAll transactions, scoped by
+  rootFolderId since only one root is active at a time), MusicDriveDatabase
+  (Room DB, singleton on MusicDriveApplication like the SimpleCaches)
+- data/LibraryRepository.kt — bridges DriveRepository (remote) and
+  LibraryDao (local): loadLibrary(rootFolderId) is a Flow that emits the
+  cached albums immediately if present, then emits again once the live
+  Drive fetch lands (and writes it back to Room). A background-refresh
+  failure is swallowed, not surfaced, as long as cache is already showing —
+  being offline shouldn't kick the user from "browsing a stale library" to
+  an error screen. clearCache() wipes everything on an explicit folder
+  change (only one root is ever active).
+- MainActivity's loadLibrary() now collects that Flow instead of a one-shot
+  suspend call; the route-reset to Albums happens once up front, not on
+  every emission, so a background refresh mid-browse doesn't kick the user
+  out of an album they're looking at.
+- Needed the KSP Gradle plugin (androidx.room + Room 2.8.4's KSP compiler);
+  confirmed the exact version to pair with Kotlin 2.4.10 by compiling
+  (ksp = "2.3.11") rather than trusting a version-lookup search result that
+  suggested a nonstandard string.
+- Verified live on the emulator: `pm clear` + first launch does the full
+  recursive fetch and populates Room (slow, as before); force-stop and
+  relaunch shows the album grid (names, track counts) in ~3s total including
+  sign-in, vs. the 10+s a from-scratch recursive Drive scan takes — cover
+  art (which has its own separate disk cache, unrelated to this) fills in
+  a moment after, not blocking the list itself.
+
 ## Next steps
 Reprioritized 2026-08-22 per explicit user ordering (was: lyrics, Android
-Auto, downloads, Room index, queue view). Playback optimization (previously
-#1) is now done — see above.
-1. Room-cached Drive index (currently every launch re-runs the recursive
-   album search and re-lists tracks; album art has its own disk cache
-   already, independent of this) — also what the album/artist view below
-   will want, to avoid re-deriving the artist grouping every launch
-2. Album/artist short view: a browse-by-artist layer above LibraryScreen
+Auto, downloads, Room index, queue view). Playback optimization and the
+Room-cached index (previously #1 and #2) are both done — see above.
+1. Album/artist short view: a browse-by-artist layer above LibraryScreen
    (artist list -> that artist's albums -> album detail), using the
-   artistHint AlbumArtRepository already derives from folder structure
-3. Queue view (the full player has next/prev but no visible upcoming-tracks
+   artistHint AlbumArtRepository/AlbumEntity already derive from folder
+   structure
+2. Queue view (the full player has next/prev but no visible upcoming-tracks
    list yet)
-4. Lyrics: embedded-tag extraction via Media3, LRCLIB fallback
-5. Downloads: Media3 DownloadManager writing into the download cache,
+3. Lyrics: embedded-tag extraction via Media3, LRCLIB fallback
+4. Downloads: Media3 DownloadManager writing into the download cache,
    per-song/per-album, never evicted
-6. Android Auto: MediaLibraryService browsing tree + automotive app
+5. Android Auto: MediaLibraryService browsing tree + automotive app
    descriptor
 
 ## Reference

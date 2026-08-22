@@ -36,6 +36,7 @@ import com.ettore.musicdrive.auth.ContextDriveAuthorizer
 import com.ettore.musicdrive.auth.DriveAuthorizationManager
 import com.ettore.musicdrive.auth.GoogleSignInManager
 import com.ettore.musicdrive.auth.SignInResult
+import com.ettore.musicdrive.data.LibraryRepository
 import com.ettore.musicdrive.data.drive.AlbumArtRepository
 import com.ettore.musicdrive.data.drive.DriveAlbum
 import com.ettore.musicdrive.data.drive.DriveRepository
@@ -59,6 +60,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var signInManager: GoogleSignInManager
     private lateinit var driveAuthorizationManager: DriveAuthorizationManager
     private lateinit var driveRepository: DriveRepository
+    private lateinit var libraryRepository: LibraryRepository
     private lateinit var albumArtRepository: AlbumArtRepository
     private lateinit var settingsRepository: SettingsRepository
     private lateinit var controllerFuture: ListenableFuture<MediaController>
@@ -83,6 +85,7 @@ class MainActivity : ComponentActivity() {
         val tokenProvider = app.driveTokenProvider
         tokenProvider.setAuthorizer(driveAuthorizationManager)
         driveRepository = DriveRepository(tokenProvider)
+        libraryRepository = LibraryRepository(driveRepository, app.database.libraryDao())
         albumArtRepository = AlbumArtRepository(this, tokenProvider)
         settingsRepository = app.settingsRepository
 
@@ -99,6 +102,7 @@ class MainActivity : ComponentActivity() {
                 MusicDriveApp(
                     signInManager = signInManager,
                     driveRepository = driveRepository,
+                    libraryRepository = libraryRepository,
                     albumArtRepository = albumArtRepository,
                     settingsRepository = settingsRepository,
                     mediaController = mediaController,
@@ -147,6 +151,7 @@ private sealed class LibraryRoute {
 private fun MusicDriveApp(
     signInManager: GoogleSignInManager,
     driveRepository: DriveRepository,
+    libraryRepository: LibraryRepository,
     albumArtRepository: AlbumArtRepository,
     settingsRepository: SettingsRepository,
     mediaController: MediaController?,
@@ -159,18 +164,22 @@ private fun MusicDriveApp(
 
     suspend fun loadLibrary(rootFolderId: String, rootFolderName: String?) {
         state = AppState.Loading
-        driveRepository.listLibraryAlbums(rootFolderId).fold(
-            onSuccess = { albums ->
-                state = AppState.LibraryLoaded(rootFolderName, albums)
-                libraryRoute = LibraryRoute.Albums
-            },
-            onFailure = { e -> state = AppState.Error(e.message ?: "Failed to list Drive files") },
-        )
+        libraryRoute = LibraryRoute.Albums
+        // Emits cached data first (if any) for an instant browse, then again once the
+        // live Drive fetch lands - the route reset above only happens once, up front,
+        // so a background refresh mid-browse doesn't kick the user out of an album.
+        libraryRepository.loadLibrary(rootFolderId).collect { result ->
+            result.fold(
+                onSuccess = { albums -> state = AppState.LibraryLoaded(rootFolderName, albums) },
+                onFailure = { e -> state = AppState.Error(e.message ?: "Failed to list Drive files") },
+            )
+        }
     }
 
     fun onFolderSelected(folderId: String, folderName: String) {
         scope.launch {
             settingsRepository.setLibraryRootFolderId(folderId)
+            libraryRepository.clearCache()
             loadLibrary(folderId, folderName)
         }
     }

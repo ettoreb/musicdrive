@@ -5,9 +5,11 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.database.StandaloneDatabaseProvider
 import androidx.media3.datasource.cache.NoOpCacheEvictor
 import androidx.media3.datasource.cache.SimpleCache
+import androidx.room.Room
 import com.ettore.musicdrive.auth.ContextDriveAuthorizer
 import com.ettore.musicdrive.auth.DriveTokenProvider
 import com.ettore.musicdrive.data.local.SettingsRepository
+import com.ettore.musicdrive.data.local.room.MusicDriveDatabase
 import com.ettore.musicdrive.playback.AdjustableLruEvictor
 import java.io.File
 import kotlinx.coroutines.CoroutineScope
@@ -38,6 +40,10 @@ class MusicDriveApplication : Application() {
     lateinit var driveTokenProvider: DriveTokenProvider
         private set
 
+    /** Caches the Drive library index (albums + tracks) so it browses instantly on relaunch. */
+    lateinit var database: MusicDriveDatabase
+        private set
+
     /** Auto-managed, evictable cache for streamed playback. Bounded by a user-configurable size cap. */
     lateinit var streamingCache: SimpleCache
         private set
@@ -53,6 +59,7 @@ class MusicDriveApplication : Application() {
 
         settingsRepository = SettingsRepository(this)
         driveTokenProvider = DriveTokenProvider(ContextDriveAuthorizer(this))
+        database = Room.databaseBuilder(this, MusicDriveDatabase::class.java, "musicdrive.db").build()
         val databaseProvider = StandaloneDatabaseProvider(this)
 
         val streamingEvictor = AdjustableLruEvictor(SettingsRepository.DEFAULT_CACHE_LIMIT_BYTES)
