@@ -48,6 +48,14 @@ private class AuthenticatingHttpDataSourceFactory(
         AuthenticatingHttpDataSource(upstream.createDataSource(), tokenProvider)
 }
 
+/** The direct-download URL for a Drive file, shared by playback and DownloadManager so their cache keys match. */
+fun driveMediaUri(fileId: String): String = "https://www.googleapis.com/drive/v3/files/$fileId?alt=media"
+
+/** Shared with download/DownloadTracker.kt so DownloadManager's requests carry a fresh Bearer token too. */
+@UnstableApi
+fun buildAuthenticatingHttpDataSourceFactory(tokenProvider: DriveTokenProvider): DataSource.Factory =
+    AuthenticatingHttpDataSourceFactory(tokenProvider)
+
 /**
  * Playback source resolution order: download cache -> streaming cache ->
  * network. Downloads are written only by Media3's DownloadManager, never by

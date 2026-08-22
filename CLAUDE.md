@@ -390,16 +390,123 @@ Lyrics implemented:
   per the ID3v2 spec but hasn't been verified against a real tagged
   file.)
 
+Downloads implemented (Media3 DownloadManager, per-song and per-album):
+- MusicDriveApplication now owns a single shared StandaloneDatabaseProvider
+  (previously a local var in onCreate) so both SimpleCache instances AND
+  DownloadManager's own index share one open db handle, plus a
+  DownloadManager (over downloadCache, Requirements default) and a
+  DownloadTracker.
+- playback/DriveDataSourceFactory.kt: extracted driveMediaUri(fileId) (the
+  "https://www.googleapis.com/drive/v3/files/{id}?alt=media" URL) and
+  buildAuthenticatingHttpDataSourceFactory(tokenProvider) as public/shared,
+  used by both MainActivity.playAlbum() and DownloadTracker — critical for
+  correctness, not just DRY: Media3's CacheDataSource keys the download
+  cache by request URI, so playback only ever finds a download if the two
+  build the exact same URI string for a given file id.
+- download/MusicDownloadService.kt: a DownloadService with a
+  PlatformScheduler(this, JOB_ID) so JobScheduler can relaunch it and
+  resume downloads if the process dies mid-download and requirements
+  (e.g. network back) are later met, not just while the app is open.
+  Needs android.permission.FOREGROUND_SERVICE_DATA_SYNC (API 34+,
+  targetSdk 37) and a manifest <service> with the
+  androidx.media3.exoplayer.downloadService.action.RESTART intent-filter.
+  New drawable ic_notification_download.xml (status-bar icon) + string
+  download_channel_name.
+- download/DownloadTracker.kt: mirrors DownloadManager's state (seeded
+  from downloadIndex.getDownloads() on init, kept live via
+  DownloadManager.Listener) into a StateFlow<Map<trackId, Download>>.
+  Album membership rides in DownloadRequest.data (the album's Drive folder
+  id, UTF-8 bytes) rather than a separate Room table, since
+  DownloadManager already persists each request's full byte payload in
+  its own index — one less thing to keep in sync.
+  albumDownloadState(album, downloads) has FOUR states, not three
+  (NONE/PARTIAL/DOWNLOADING/COMPLETE): a real bug was found live on the
+  emulator where PARTIAL (some tracks already downloaded standalone,
+  none currently in flight) was originally folded into DOWNLOADING —
+  tapping "download album" at that point read as "cancel the in-flight
+  download" and deleted the one track that WAS already done, instead of
+  fetching the rest. PARTIAL now renders the same download-icon affordance
+  as NONE (tap resumes/finishes the album; re-adding an already-COMPLETED
+  track's request is a no-op, Media3 doesn't re-fetch bytes it has).
+- ui/AlbumDetailScreen.kt: per-track download icon (Download /
+  spinner-while-downloading / DownloadDone, tap toggles) plus one
+  album-level icon in a new ScreenHeader trailing-actions slot (see next
+  bullet). ui/ScreenHeader.kt gained an optional
+  `actions: @Composable RowScope.() -> Unit` slot, reused by the album
+  sort button (see below) too instead of adding a third bespoke header.
+- Verified live end to end on the emulator: downloaded a single track (a
+  real 4.7MB file landed in files/download_cache), downloaded a whole
+  7-track album (all 7 real audio files on disk, correct total bytes),
+  removed the whole album (files actually deleted from download_cache),
+  and reproduced + fixed the PARTIAL-state bug above by downloading one
+  track standalone first, then tapping "download album" and confirming
+  it finishes the album instead of deleting the first track.
+
+Streaming cache size, theme, and album sort are now user-facing settings
+(the cache size DataStore plumbing already existed per the original
+architecture plan — Room, an AdjustableLruEvictor reading it live — but
+had no UI before this, exactly the "not yet user-facing" gap README.md
+had flagged):
+- data/local/SettingsRepository.kt gained three more DataStore-backed
+  settings: themeMode (ThemeMode: SYSTEM/LIGHT/DARK, key theme_mode),
+  libraryViewMode (LibraryViewMode: ARTISTS/ALBUMS, key
+  library_view_mode — which top-level browse tab was open last, restored
+  on next launch), and albumSortMode (AlbumSortMode: NAME/TRACK_COUNT,
+  key album_sort_mode).
+- ui/theme/Theme.kt: MusicDriveTheme now takes a ThemeMode param instead
+  of a raw darkTheme Boolean; SYSTEM still defers to isSystemInDarkTheme().
+  Collected once at the MainActivity.onCreate/setContent level (wrapping
+  the whole app) so a change from within the new Settings screen (nested
+  deep inside) takes effect immediately without restarting the activity.
+- ui/SettingsScreen.kt (new): radio-row sections for cache size (500 MB /
+  1 GB / 2 GB / 5 GB / 10 GB presets, not a raw byte slider — simpler and
+  plenty granular for a personal library), appearance (Follow system /
+  Light / Dark), and default album sort. Opened via a new gear IconButton
+  next to "Change library folder".
+  Real bug found and fixed live: SettingsScreen (and, it turned out,
+  QueueScreen's sibling LyricsScreen too) is shown as a full-screen
+  overlay Box in MainActivity, same pattern as FullPlayerScreen/
+  QueueScreen — but unlike those two, it had no
+  `.background(MaterialTheme.colorScheme.surface)` on its root Column, so
+  the album grid underneath showed through behind the settings text.
+  QueueScreen already had the background; LyricsScreen was missing it too
+  and got the same fix.
+- Verified live: cache size, theme, and sort selections all persist
+  across a full app relaunch (confirmed via re-opening Settings after
+  force-stopping and restarting); switching to Dark visibly re-themes the
+  whole app (including the Settings screen itself) instantly with no
+  transparency artifacts after the background fix.
+
+Artists/Albums view toggle and album sort implemented:
+- MainActivity's LibraryRoute gained a top-level `Albums` route (flat grid
+  of every album in the library, ungrouped) alongside the existing
+  `Artists` route, and `AlbumDetail` now carries `backTo: LibraryRoute`
+  instead of a fixed `artist: ArtistSummary` — generalizing the back
+  target so AlbumDetail can be reached from either the flat Albums grid
+  or an artist's album grid and return to the right place either way.
+  loadLibrary() now reopens on whichever tab (settingsRepository's
+  libraryViewMode) was open last, instead of always resetting to Artists.
+- New private LibraryTopBar composable (folder-change button + settings
+  gear + an Artists/Albums FilterChip pair) replaces the old bare
+  "Change library folder" TextButton, shared by both top-level routes.
+  Selecting a tab both switches the route immediately and persists the
+  choice via setLibraryViewMode.
+- ui/LibraryScreen.kt gained `List<DriveAlbum>.sortedByMode(AlbumSortMode)`
+  (NAME → alphabetical, TRACK_COUNT → most tracks first); applied to both
+  the flat Albums grid and an artist's album grid via a shared
+  AlbumSortMenuButton (IconButton + DropdownMenu) in MainActivity, wired
+  into ScreenHeader's new actions slot for the artist view and inline for
+  the flat view.
+- Verified live: the flat Albums tab correctly shows all 44 albums
+  (24 Depeche Mode + 20 U2) vs. the Artists tab's 2 artist rows; switching
+  sort to "Track count" correctly re-orders the grid descending (8, 7, 7,
+  6, ... confirmed against the actual per-album track counts); the chosen
+  tab and sort mode both survive a force-stop + relaunch.
+
 ## Next steps
-Reprioritized 2026-08-22 per explicit user ordering (was: lyrics, Android
-Auto, downloads, Room index, queue view). Playback optimization, the
-Room-cached index, the album/artist view, the queue view, and lyrics
-(previously #1-#5) are all done — see above.
-1. Downloads: Media3 DownloadManager writing into the download cache,
-   per-song/per-album, never evicted
-2. Android Auto: MediaLibraryService browsing tree + automotive app
+1. Android Auto: MediaLibraryService browsing tree + automotive app
    descriptor
-3. (not user-ordered, opportunistic) Merge multi-disc release folders
+2. (not user-ordered, opportunistic) Merge multi-disc release folders
    (CD1/CD2/Disc N) into a single album instead of showing each disc as
    its own album — see "Album/artist view" above
 

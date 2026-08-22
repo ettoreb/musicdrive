@@ -10,6 +10,12 @@ import kotlinx.coroutines.flow.map
 
 private val Context.settingsDataStore by preferencesDataStore(name = "settings")
 
+enum class ThemeMode { SYSTEM, LIGHT, DARK }
+
+enum class LibraryViewMode { ARTISTS, ALBUMS }
+
+enum class AlbumSortMode { NAME, TRACK_COUNT }
+
 class SettingsRepository(private val context: Context) {
 
     val cacheLimitBytes: Flow<Long> = context.settingsDataStore.data.map { prefs ->
@@ -31,9 +37,37 @@ class SettingsRepository(private val context: Context) {
         }
     }
 
+    val themeMode: Flow<ThemeMode> = context.settingsDataStore.data.map { prefs ->
+        prefs[THEME_MODE_KEY]?.let { runCatching { ThemeMode.valueOf(it) }.getOrNull() } ?: ThemeMode.SYSTEM
+    }
+
+    suspend fun setThemeMode(mode: ThemeMode) {
+        context.settingsDataStore.edit { prefs -> prefs[THEME_MODE_KEY] = mode.name }
+    }
+
+    /** Which top-level browse tab (Artists vs. flat Albums grid) was open last, so it's remembered across launches. */
+    val libraryViewMode: Flow<LibraryViewMode> = context.settingsDataStore.data.map { prefs ->
+        prefs[LIBRARY_VIEW_MODE_KEY]?.let { runCatching { LibraryViewMode.valueOf(it) }.getOrNull() } ?: LibraryViewMode.ARTISTS
+    }
+
+    suspend fun setLibraryViewMode(mode: LibraryViewMode) {
+        context.settingsDataStore.edit { prefs -> prefs[LIBRARY_VIEW_MODE_KEY] = mode.name }
+    }
+
+    val albumSortMode: Flow<AlbumSortMode> = context.settingsDataStore.data.map { prefs ->
+        prefs[ALBUM_SORT_MODE_KEY]?.let { runCatching { AlbumSortMode.valueOf(it) }.getOrNull() } ?: AlbumSortMode.NAME
+    }
+
+    suspend fun setAlbumSortMode(mode: AlbumSortMode) {
+        context.settingsDataStore.edit { prefs -> prefs[ALBUM_SORT_MODE_KEY] = mode.name }
+    }
+
     companion object {
         const val DEFAULT_CACHE_LIMIT_BYTES = 2L * 1024 * 1024 * 1024 // 2 GB
         private val CACHE_LIMIT_BYTES_KEY = longPreferencesKey("cache_limit_bytes")
         private val LIBRARY_ROOT_FOLDER_ID_KEY = stringPreferencesKey("library_root_folder_id")
+        private val THEME_MODE_KEY = stringPreferencesKey("theme_mode")
+        private val LIBRARY_VIEW_MODE_KEY = stringPreferencesKey("library_view_mode")
+        private val ALBUM_SORT_MODE_KEY = stringPreferencesKey("album_sort_mode")
     }
 }

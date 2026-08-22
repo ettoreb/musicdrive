@@ -1,5 +1,6 @@
 package com.ettore.musicdrive.ui
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -151,7 +152,12 @@ fun LyricsScreen(
 ) {
     val state = rememberLyricsState(controller, playerState, lyricsRepository)
 
-    Column(modifier = modifier.fillMaxSize().statusBarsPadding()) {
+    Column(
+        modifier = modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.surface)
+            .statusBarsPadding(),
+    ) {
         ScreenHeader(title = "Lyrics", onBack = onBack)
 
         Box(modifier = Modifier.fillMaxSize()) {

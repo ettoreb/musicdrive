@@ -9,22 +9,25 @@ project, sideloaded (not published to the Play Store).
 🚧 Early development, but the core loop works: sign in, pick your Drive
 music folder, browse a real album grid with real cover art, and play — with
 background playback, a streaming cache, a mini/full player, a queue view,
-and lyrics. Downloads and Android Auto are still to come.
+lyrics, and permanent per-song/per-album downloads. Android Auto is still
+to come.
 
 | Feature | Status |
 |---|---|
 | Google sign-in (Credential Manager, remembered across launches) | ✅ Working |
 | Drive authorization (`drive.readonly`) | ✅ Working |
 | Music folder picker (choose Drive library root) | ✅ Working |
+| Artists / Albums view toggle, sortable by name or track count | ✅ Working |
 | Artist list → album grid → album detail (Material 3) | ✅ Working |
 | Automatic album covers (embedded art + iTunes fallback) | ✅ Working |
 | Playback (Media3/ExoPlayer, background, notification) | ✅ Working |
 | Mini-player + full-screen player (expand/collapse, seek, skip) | ✅ Working |
 | Queue view (see and jump to any upcoming/previous track) | ✅ Working |
-| Streaming cache (configurable size, LRU eviction) | ✅ Working (eviction limit not yet user-facing) |
+| Streaming cache (user-configurable size, LRU eviction) | ✅ Working |
+| Permanent offline downloads (per-song and per-album) | ✅ Working |
 | Room-cached library index (instant browse on relaunch) | ✅ Working |
 | Lyrics (embedded ID3 tags + LRCLIB fallback, cached) | ✅ Working |
-| Permanent offline downloads | ⏳ Planned |
+| Settings (cache size, light/dark/system theme) | ✅ Working |
 | Android Auto | ⏳ Planned |
 
 ## How it works

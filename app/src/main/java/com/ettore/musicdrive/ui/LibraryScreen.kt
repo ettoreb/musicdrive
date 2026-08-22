@@ -31,6 +31,12 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import com.ettore.musicdrive.data.drive.DriveAlbum
+import com.ettore.musicdrive.data.local.AlbumSortMode
+
+fun List<DriveAlbum>.sortedByMode(mode: AlbumSortMode): List<DriveAlbum> = when (mode) {
+    AlbumSortMode.NAME -> sortedBy { it.name }
+    AlbumSortMode.TRACK_COUNT -> sortedByDescending { it.tracks.size }
+}
 
 @Composable
 fun LibraryScreen(

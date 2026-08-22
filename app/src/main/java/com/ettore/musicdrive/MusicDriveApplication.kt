@@ -5,13 +5,17 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.database.StandaloneDatabaseProvider
 import androidx.media3.datasource.cache.NoOpCacheEvictor
 import androidx.media3.datasource.cache.SimpleCache
+import androidx.media3.exoplayer.offline.DownloadManager
 import androidx.room.Room
 import com.ettore.musicdrive.auth.ContextDriveAuthorizer
 import com.ettore.musicdrive.auth.DriveTokenProvider
 import com.ettore.musicdrive.data.local.SettingsRepository
 import com.ettore.musicdrive.data.local.room.MusicDriveDatabase
+import com.ettore.musicdrive.download.DownloadTracker
 import com.ettore.musicdrive.playback.AdjustableLruEvictor
+import com.ettore.musicdrive.playback.buildAuthenticatingHttpDataSourceFactory
 import java.io.File
+import java.util.concurrent.Executors
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -52,6 +56,17 @@ class MusicDriveApplication : Application() {
     lateinit var downloadCache: SimpleCache
         private set
 
+    /** Owns the download queue (persisted in its own table via [databaseProvider]) and survives the app being closed. */
+    lateinit var downloadManager: DownloadManager
+        private set
+
+    /** Mirrors [downloadManager]'s state as Compose-friendly StateFlows; one instance for the whole process. */
+    lateinit var downloadTracker: DownloadTracker
+        private set
+
+    /** Shared by both SimpleCache instances and the DownloadManager's own index, so there's one open db handle, not three. */
+    private lateinit var databaseProvider: StandaloneDatabaseProvider
+
     private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     override fun onCreate() {
@@ -64,7 +79,7 @@ class MusicDriveApplication : Application() {
         database = Room.databaseBuilder(this, MusicDriveDatabase::class.java, "musicdrive.db")
             .fallbackToDestructiveMigration(dropAllTables = true)
             .build()
-        val databaseProvider = StandaloneDatabaseProvider(this)
+        databaseProvider = StandaloneDatabaseProvider(this)
 
         val streamingEvictor = AdjustableLruEvictor(SettingsRepository.DEFAULT_CACHE_LIMIT_BYTES)
         streamingCache = SimpleCache(
@@ -84,5 +99,13 @@ class MusicDriveApplication : Application() {
             NoOpCacheEvictor(),
             databaseProvider,
         )
+        downloadManager = DownloadManager(
+            this,
+            databaseProvider,
+            downloadCache,
+            buildAuthenticatingHttpDataSourceFactory(driveTokenProvider),
+            Executors.newFixedThreadPool(3),
+        )
+        downloadTracker = DownloadTracker(this, downloadManager)
     }
 }
