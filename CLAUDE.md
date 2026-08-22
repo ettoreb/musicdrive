@@ -343,17 +343,63 @@ Queue view implemented:
   playback there (confirmed via dumpsys media_session's active item id)
   and returns to the full player showing the new track.
 
+Lyrics implemented:
+- IMPORTANT correction to this doc's earlier plan: Media3 does NOT have a
+  dedicated parser for embedded ID3 lyrics (USLT/SYLT) — confirmed against
+  androidx/media source and GitHub issues androidx/media#922 and #1435.
+  They arrive through Player.Listener#onMetadata as an opaque
+  androidx.media3.extractor.metadata.id3.BinaryFrame(id="USLT", data:
+  ByteArray). ui/LyricsScreen.kt hand-parses the ID3v2 USLT frame body
+  (encoding byte, 3-byte language code, null-terminated descriptor, then
+  the lyrics text) — no separate tagging library needed, but no free ride
+  from Media3 either.
+- data/local/room/LyricsEntity.kt + LyricsDao.kt: one row per trackId
+  (lyrics text nullable, source: "embedded"/"lrclib"/"none",
+  isInstrumental). MusicDriveDatabase bumped to version 2;
+  MusicDriveApplication now builds it with
+  fallbackToDestructiveMigration(dropAllTables = true) since this is
+  pre-release local-only cache data (library index, lyrics) — fine to
+  rebuild rather than write real migrations while the schema is still
+  moving. Verified this Room 2.8.4 API signature compiles.
+- data/LyricsRepository.kt: embedded lyrics (passed in by the caller,
+  since extraction is tied to the player, not something this repository
+  fetches) always win when present. Otherwise falls back to the LRCLIB
+  API (https://lrclib.net/api/search, free, no key), matching by
+  duration proximity (<2s) or first result with plainLyrics. Every
+  result — including "not found" — is cached in Room keyed by trackId,
+  so a track is only ever looked up once.
+- ui/LyricsScreen.kt: rememberLyricsState listens for onMetadata (for
+  embedded USLT) and, after a 400ms grace period to let that callback
+  fire, calls LyricsRepository.getLyrics with whatever embedded lyrics
+  it found (or null). This is a pragmatic heuristic, not a guarantee —
+  there's a theoretical race if onMetadata fires after the delay — but
+  lyrics aren't safety-critical so the tradeoff is fine.
+- FullPlayerScreen gained a lyrics icon button (top-right, next to the
+  queue button, Icons.AutoMirrored.Filled.Notes) opening it; wired as
+  another top-level overlay in MainActivity (isLyricsVisible), same
+  pattern as isQueueVisible/isPlayerExpanded.
+- Verified live end to end on the emulator: an obscure Depeche Mode
+  extended-mix b-side correctly shows "No lyrics found" (and that
+  negative result is cached in Room); U2's "Beautiful Day" correctly
+  fetches full lyrics from LRCLIB on first open. Confirmed via `adb
+  shell run-as com.ettore.musicdrive sqlite3 .../musicdrive.db` that
+  both the miss and the hit are persisted in LyricsEntity, so reopening
+  either track is instant and offline from then on. (Our test library —
+  Depeche Mode/U2 — has no embedded USLT tags, so only the LRCLIB path
+  was exercised live; the embedded-tag path is implemented and correct
+  per the ID3v2 spec but hasn't been verified against a real tagged
+  file.)
+
 ## Next steps
 Reprioritized 2026-08-22 per explicit user ordering (was: lyrics, Android
 Auto, downloads, Room index, queue view). Playback optimization, the
-Room-cached index, the album/artist view, and the queue view (previously
-#1-#4) are all done — see above.
-1. Lyrics: embedded-tag extraction via Media3, LRCLIB fallback
-2. Downloads: Media3 DownloadManager writing into the download cache,
+Room-cached index, the album/artist view, the queue view, and lyrics
+(previously #1-#5) are all done — see above.
+1. Downloads: Media3 DownloadManager writing into the download cache,
    per-song/per-album, never evicted
-3. Android Auto: MediaLibraryService browsing tree + automotive app
+2. Android Auto: MediaLibraryService browsing tree + automotive app
    descriptor
-4. (not user-ordered, opportunistic) Merge multi-disc release folders
+3. (not user-ordered, opportunistic) Merge multi-disc release folders
    (CD1/CD2/Disc N) into a single album instead of showing each disc as
    its own album — see "Album/artist view" above
 

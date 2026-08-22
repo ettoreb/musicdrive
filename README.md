@@ -8,8 +8,8 @@ project, sideloaded (not published to the Play Store).
 
 🚧 Early development, but the core loop works: sign in, pick your Drive
 music folder, browse a real album grid with real cover art, and play — with
-background playback, a streaming cache, and a mini/full player. Downloads,
-lyrics, and Android Auto are still to come.
+background playback, a streaming cache, a mini/full player, a queue view,
+and lyrics. Downloads and Android Auto are still to come.
 
 | Feature | Status |
 |---|---|
@@ -23,8 +23,8 @@ lyrics, and Android Auto are still to come.
 | Queue view (see and jump to any upcoming/previous track) | ✅ Working |
 | Streaming cache (configurable size, LRU eviction) | ✅ Working (eviction limit not yet user-facing) |
 | Room-cached library index (instant browse on relaunch) | ✅ Working |
+| Lyrics (embedded ID3 tags + LRCLIB fallback, cached) | ✅ Working |
 | Permanent offline downloads | ⏳ Planned |
-| Lyrics (embedded + LRCLIB fallback) | ⏳ Planned |
 | Android Auto | ⏳ Planned |
 
 ## How it works

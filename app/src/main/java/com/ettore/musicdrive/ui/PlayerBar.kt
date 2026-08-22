@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Notes
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Pause
@@ -53,8 +54,10 @@ import androidx.media3.session.MediaController
 import kotlinx.coroutines.delay
 
 data class PlayerUiState(
+    val mediaId: String = "",
     val title: String = "",
     val artist: String = "",
+    val albumTitle: String = "",
     val isPlaying: Boolean = false,
     val positionMs: Long = 0L,
     val durationMs: Long = 0L,
@@ -81,8 +84,10 @@ fun rememberPlayerUiState(controller: MediaController?): PlayerUiState {
         fun refresh() {
             val metadata = controller.mediaMetadata
             state = PlayerUiState(
+                mediaId = controller.currentMediaItem?.mediaId.orEmpty(),
                 title = metadata.title?.toString().orEmpty(),
                 artist = metadata.artist?.toString().orEmpty(),
+                albumTitle = metadata.albumTitle?.toString().orEmpty(),
                 isPlaying = controller.isPlaying,
                 positionMs = controller.currentPosition.coerceAtLeast(0),
                 durationMs = controller.duration.coerceAtLeast(0),
@@ -187,6 +192,7 @@ fun FullPlayerScreen(
     onSeek: (positionMs: Long) -> Unit,
     onCollapse: () -> Unit,
     onOpenQueue: () -> Unit,
+    onOpenLyrics: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val artBitmap = rememberArtBitmap(state.artworkData)
@@ -202,8 +208,13 @@ fun FullPlayerScreen(
             IconButton(onClick = onCollapse) {
                 Icon(Icons.Filled.KeyboardArrowDown, contentDescription = "Collapse")
             }
-            IconButton(onClick = onOpenQueue) {
-                Icon(Icons.AutoMirrored.Filled.QueueMusic, contentDescription = "Queue")
+            Row {
+                IconButton(onClick = onOpenLyrics) {
+                    Icon(Icons.AutoMirrored.Filled.Notes, contentDescription = "Lyrics")
+                }
+                IconButton(onClick = onOpenQueue) {
+                    Icon(Icons.AutoMirrored.Filled.QueueMusic, contentDescription = "Queue")
+                }
             }
         }
 

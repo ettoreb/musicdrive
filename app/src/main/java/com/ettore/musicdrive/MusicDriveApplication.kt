@@ -59,7 +59,11 @@ class MusicDriveApplication : Application() {
 
         settingsRepository = SettingsRepository(this)
         driveTokenProvider = DriveTokenProvider(ContextDriveAuthorizer(this))
-        database = Room.databaseBuilder(this, MusicDriveDatabase::class.java, "musicdrive.db").build()
+        // Pre-release, local-only cache data (library index, lyrics) - fine to just rebuild
+        // it rather than write real migrations while the schema is still actively changing.
+        database = Room.databaseBuilder(this, MusicDriveDatabase::class.java, "musicdrive.db")
+            .fallbackToDestructiveMigration(dropAllTables = true)
+            .build()
         val databaseProvider = StandaloneDatabaseProvider(this)
 
         val streamingEvictor = AdjustableLruEvictor(SettingsRepository.DEFAULT_CACHE_LIMIT_BYTES)

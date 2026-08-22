@@ -38,6 +38,7 @@ import com.ettore.musicdrive.auth.DriveAuthorizationManager
 import com.ettore.musicdrive.auth.GoogleSignInManager
 import com.ettore.musicdrive.auth.SignInResult
 import com.ettore.musicdrive.data.LibraryRepository
+import com.ettore.musicdrive.data.LyricsRepository
 import com.ettore.musicdrive.data.drive.AlbumArtRepository
 import com.ettore.musicdrive.data.drive.DriveAlbum
 import com.ettore.musicdrive.data.drive.DriveRepository
@@ -49,6 +50,7 @@ import com.ettore.musicdrive.ui.ArtistSummary
 import com.ettore.musicdrive.ui.FolderPickerScreen
 import com.ettore.musicdrive.ui.FullPlayerScreen
 import com.ettore.musicdrive.ui.LibraryScreen
+import com.ettore.musicdrive.ui.LyricsScreen
 import com.ettore.musicdrive.ui.MiniPlayerBar
 import com.ettore.musicdrive.ui.QueueScreen
 import com.ettore.musicdrive.ui.ScreenHeader
@@ -70,6 +72,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var libraryRepository: LibraryRepository
     private lateinit var albumArtRepository: AlbumArtRepository
     private lateinit var settingsRepository: SettingsRepository
+    private lateinit var lyricsRepository: LyricsRepository
     private lateinit var controllerFuture: ListenableFuture<MediaController>
 
     // Compose-observable so the UI recomposes once the controller finishes connecting.
@@ -95,6 +98,7 @@ class MainActivity : ComponentActivity() {
         libraryRepository = LibraryRepository(driveRepository, app.database.libraryDao())
         albumArtRepository = AlbumArtRepository(this, tokenProvider)
         settingsRepository = app.settingsRepository
+        lyricsRepository = LyricsRepository(app.database.lyricsDao())
 
         val sessionToken = SessionToken(this, ComponentName(this, MusicPlaybackService::class.java))
         controllerFuture = MediaController.Builder(this, sessionToken).buildAsync()
@@ -112,6 +116,7 @@ class MainActivity : ComponentActivity() {
                     libraryRepository = libraryRepository,
                     albumArtRepository = albumArtRepository,
                     settingsRepository = settingsRepository,
+                    lyricsRepository = lyricsRepository,
                     mediaController = mediaController,
                     onPlayAlbum = ::playAlbum,
                 )
@@ -166,6 +171,7 @@ private fun MusicDriveApp(
     libraryRepository: LibraryRepository,
     albumArtRepository: AlbumArtRepository,
     settingsRepository: SettingsRepository,
+    lyricsRepository: LyricsRepository,
     mediaController: MediaController?,
     onPlayAlbum: (DriveAlbum, startIndex: Int) -> Unit,
 ) {
@@ -173,6 +179,7 @@ private fun MusicDriveApp(
     var libraryRoute by remember { mutableStateOf<LibraryRoute>(LibraryRoute.Artists) }
     var isPlayerExpanded by remember { mutableStateOf(false) }
     var isQueueVisible by remember { mutableStateOf(false) }
+    var isLyricsVisible by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
     suspend fun loadLibrary(rootFolderId: String, rootFolderName: String?) {
@@ -337,6 +344,7 @@ private fun MusicDriveApp(
                 onSeek = { positionMs -> mediaController?.seekTo(positionMs) },
                 onCollapse = { isPlayerExpanded = false },
                 onOpenQueue = { isQueueVisible = true },
+                onOpenLyrics = { isLyricsVisible = true },
             )
         }
 
@@ -348,6 +356,15 @@ private fun MusicDriveApp(
                     isQueueVisible = false
                 },
                 onBack = { isQueueVisible = false },
+            )
+        }
+
+        if (isLyricsVisible) {
+            LyricsScreen(
+                controller = mediaController,
+                playerState = playerUiState,
+                lyricsRepository = lyricsRepository,
+                onBack = { isLyricsVisible = false },
             )
         }
     }
