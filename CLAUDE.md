@@ -16,6 +16,22 @@ YouTube Music (not a visual clone). Personal/sideloaded app, not for Play Store.
   META-INF/INDEX.LIST and META-INF/DEPENDENCIES; excluded via
   android.packaging.resources.excludes in app/build.gradle.kts.
 - No physical device attached yet (USB/adb unresolved); use emulator for now
+- AVD `musicdrive_test` (Pixel 6, API 34, google_apis x86_64) was created via
+  cmdline-tools/sdkmanager+avdmanager (~/Android/Sdk had no cmdline-tools, no
+  AVD, no system image initially). Boot with the emulator at
+  ~/Android/Sdk/emulator/emulator -avd musicdrive_test (drop -no-window to see
+  the GUI on the host's Wayland session; DISPLAY=:0 is already set there).
+- google_apis image has NO Play Store; add a Google account manually via
+  Settings > Accounts > Add account > Google (needed for Credential
+  Manager / drive.readonly to have anything to authenticate). The signed-in
+  account must also be added as a Test user on the OAuth consent screen in
+  Google Cloud Console, or sign-in fails with Error 403: access_denied.
+- Emulator gotcha: the simulated WiFi radio ("AndroidWifi") sometimes drops
+  and reconnects a few minutes after boot, causing a transient app-level
+  `UnknownHostException` on the exact request that lands during the blip
+  (OS-level `ping` still resolves fine via the other network, so it's easy to
+  misdiagnose as a real DNS bug). Fix: `adb shell svc wifi disable` to force
+  the emulator onto its cellular (eth0) network, which doesn't flap.
 
 ## Core requirements
 1. Stream audio files from Google Drive
@@ -77,14 +93,13 @@ Web OAuth clients). Compose is wired up. Auth module implemented:
 - data/drive/DriveRepository.kt — lists audio files via com.google.api.services.drive
 MainActivity has a smoke-test screen: "Sign in with Google" -> Drive
 authorization -> lists audio files in a LazyColumn. `./gradlew assembleDebug`
-succeeds. NOT yet tested live on an emulator/device (needs manual Google
-consent flow) — do that before trusting the auth path. No playback/download
-code yet.
+succeeds, AND the full flow has been verified live end to end on the
+musicdrive_test emulator with a real Google account (ettore.bartoli17@gmail.com,
+added as an OAuth test user) — sign-in, Drive consent, and the real file list
+(mp3s) all worked. No playback/download code yet.
 
 ## Next steps
-1. Run the app on an emulator/device and manually verify the sign-in ->
-   Drive-authorization -> file-listing smoke test actually works end to end
-2. Move on to playback (Media3/ExoPlayer, MediaSessionService, the two
+1. Move on to playback (Media3/ExoPlayer, MediaSessionService, the two
    SimpleCache instances)
 
 ## Reference
