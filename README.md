@@ -17,8 +17,8 @@ real UI, downloads, and the rest of the roadmap are still to come.
 | List audio files from Drive | ✅ Working (smoke test) |
 | Playback (Media3/ExoPlayer, background, notification, queue) | ✅ Working (smoke test) |
 | Streaming cache (configurable size, LRU eviction) | ✅ Working (eviction limit not yet user-facing) |
+| Music folder picker (choose Drive library root) | ✅ Working |
 | Permanent offline downloads | ⏳ Planned |
-| Music folder picker (choose Drive library root) | ⏳ Planned |
 | Material 3 UI, album view, mini/full player | ⏳ Planned |
 | Lyrics (embedded + LRCLIB fallback) | ⏳ Planned |
 | Automatic album covers (embedded + online fallback) | ⏳ Planned |
@@ -26,8 +26,9 @@ real UI, downloads, and the rest of the roadmap are still to come.
 
 ## How it works
 
-- **Library model**: a Drive folder = an album. Point the app at a root
-  folder in your Drive and its subfolders become your library.
+- **Library model**: a Drive folder = an album, found by searching down from
+  your chosen root for the first folder(s) that directly contain audio files
+  — so both `root/Album` and `root/Artist/Album` layouts work.
 - **Playback**: Media3/ExoPlayer with two separate caches — an
   auto-managed streaming cache with a user-configurable size cap (LRU
   eviction), and a separate permanent cache for explicit downloads that are

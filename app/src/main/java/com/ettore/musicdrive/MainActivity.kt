@@ -21,6 +21,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -41,10 +42,13 @@ import com.ettore.musicdrive.auth.GoogleSignInManager
 import com.ettore.musicdrive.auth.SignInResult
 import com.ettore.musicdrive.data.drive.DriveAudioFile
 import com.ettore.musicdrive.data.drive.DriveRepository
+import com.ettore.musicdrive.data.local.SettingsRepository
 import com.ettore.musicdrive.playback.MusicPlaybackService
+import com.ettore.musicdrive.ui.FolderPickerScreen
 import com.ettore.musicdrive.ui.theme.MusicDriveTheme
 import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.MoreExecutors
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 
 @UnstableApi
@@ -53,6 +57,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var signInManager: GoogleSignInManager
     private lateinit var driveAuthorizationManager: DriveAuthorizationManager
     private lateinit var driveRepository: DriveRepository
+    private lateinit var settingsRepository: SettingsRepository
     private lateinit var controllerFuture: ListenableFuture<MediaController>
     private var mediaController: MediaController? = null
 
@@ -69,8 +74,10 @@ class MainActivity : ComponentActivity() {
         signInManager = GoogleSignInManager(this)
         driveAuthorizationManager = DriveAuthorizationManager(this)
         val tokenProvider = DriveTokenProvider(driveAuthorizationManager)
-        (application as MusicDriveApplication).driveTokenProvider = tokenProvider
+        val app = application as MusicDriveApplication
+        app.driveTokenProvider = tokenProvider
         driveRepository = DriveRepository(tokenProvider)
+        settingsRepository = app.settingsRepository
 
         val sessionToken = SessionToken(this, ComponentName(this, MusicPlaybackService::class.java))
         controllerFuture = MediaController.Builder(this, sessionToken).buildAsync()
@@ -85,6 +92,7 @@ class MainActivity : ComponentActivity() {
                 MusicDriveApp(
                     signInManager = signInManager,
                     driveRepository = driveRepository,
+                    settingsRepository = settingsRepository,
                     onPlayFile = ::playFile,
                 )
             }
@@ -111,7 +119,8 @@ class MainActivity : ComponentActivity() {
 private sealed class SmokeTestState {
     data object SignedOut : SmokeTestState()
     data object Loading : SmokeTestState()
-    data class Loaded(val files: List<DriveAudioFile>) : SmokeTestState()
+    data object PickingFolder : SmokeTestState()
+    data class Loaded(val libraryFolderName: String?, val files: List<DriveAudioFile>) : SmokeTestState()
     data class Error(val message: String) : SmokeTestState()
 }
 
@@ -119,21 +128,39 @@ private sealed class SmokeTestState {
 private fun MusicDriveApp(
     signInManager: GoogleSignInManager,
     driveRepository: DriveRepository,
+    settingsRepository: SettingsRepository,
     onPlayFile: (DriveAudioFile) -> Unit,
 ) {
     var state by remember { mutableStateOf<SmokeTestState>(SmokeTestState.Loading) }
     val scope = rememberCoroutineScope()
 
-    fun signInAndListAudioFiles(interactive: Boolean) {
+    suspend fun loadLibrary(rootFolderId: String, rootFolderName: String?) {
+        state = SmokeTestState.Loading
+        driveRepository.listLibraryAudioFiles(rootFolderId).fold(
+            onSuccess = { files -> state = SmokeTestState.Loaded(rootFolderName, files) },
+            onFailure = { e -> state = SmokeTestState.Error(e.message ?: "Failed to list Drive files") },
+        )
+    }
+
+    fun onFolderSelected(folderId: String, folderName: String) {
+        scope.launch {
+            settingsRepository.setLibraryRootFolderId(folderId)
+            loadLibrary(folderId, folderName)
+        }
+    }
+
+    fun signInAndProceed(interactive: Boolean) {
         state = SmokeTestState.Loading
         scope.launch {
             val signIn = if (interactive) signInManager.signInInteractive() else signInManager.signInSilently()
             when (signIn) {
                 is SignInResult.Success -> {
-                    driveRepository.listAudioFiles().fold(
-                        onSuccess = { files -> state = SmokeTestState.Loaded(files) },
-                        onFailure = { e -> state = SmokeTestState.Error(e.message ?: "Failed to list Drive files") },
-                    )
+                    val rootFolderId = settingsRepository.libraryRootFolderId.first()
+                    if (rootFolderId == null) {
+                        state = SmokeTestState.PickingFolder
+                    } else {
+                        loadLibrary(rootFolderId, rootFolderName = null)
+                    }
                 }
                 is SignInResult.NoCredential -> {
                     state = SmokeTestState.SignedOut
@@ -147,7 +174,7 @@ private fun MusicDriveApp(
 
     // Try to resume a previously authorized account silently before ever showing the sign-in button.
     LaunchedEffect(Unit) {
-        signInAndListAudioFiles(interactive = false)
+        signInAndProceed(interactive = false)
     }
 
     Scaffold { innerPadding ->
@@ -165,7 +192,7 @@ private fun MusicDriveApp(
                     Text("MusicDrive")
                     Button(
                         modifier = Modifier.padding(top = 16.dp),
-                        onClick = { signInAndListAudioFiles(interactive = true) },
+                        onClick = { signInAndProceed(interactive = true) },
                     ) {
                         Text("Sign in with Google")
                     }
@@ -186,26 +213,36 @@ private fun MusicDriveApp(
                     Text("Error: ${current.message}", color = MaterialTheme.colorScheme.error)
                     Button(
                         modifier = Modifier.padding(top = 16.dp),
-                        onClick = { signInAndListAudioFiles(interactive = true) },
+                        onClick = { signInAndProceed(interactive = true) },
                     ) {
                         Text("Retry")
                     }
                 }
 
-                is SmokeTestState.Loaded -> if (current.files.isEmpty()) {
-                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Text("Signed in. No audio files found on Drive.")
+                is SmokeTestState.PickingFolder -> FolderPickerScreen(
+                    driveRepository = driveRepository,
+                    onFolderSelected = ::onFolderSelected,
+                )
+
+                is SmokeTestState.Loaded -> Column(modifier = Modifier.fillMaxSize()) {
+                    TextButton(onClick = { state = SmokeTestState.PickingFolder }) {
+                        Text("Change library folder" + (current.libraryFolderName?.let { " (currently \"$it\")" } ?: ""))
                     }
-                } else {
-                    LazyColumn(modifier = Modifier.fillMaxSize().padding(16.dp)) {
-                        items(current.files) { file ->
-                            Text(
-                                "${file.name} (${file.mimeType})",
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .clickable { onPlayFile(file) }
-                                    .padding(vertical = 12.dp),
-                            )
+                    if (current.files.isEmpty()) {
+                        Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                            Text("No audio files found in this folder's albums.")
+                        }
+                    } else {
+                        LazyColumn(modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = 16.dp)) {
+                            items(current.files) { file ->
+                                Text(
+                                    "${file.name} (${file.mimeType})",
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable { onPlayFile(file) }
+                                        .padding(vertical = 12.dp),
+                                )
+                            }
                         }
                     }
                 }

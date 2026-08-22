@@ -63,13 +63,20 @@ this file.
 - Playback source resolution order: download cache -> streaming cache -> network
 - Both caches MUST be singletons initialised in Application.onCreate().
   Two SimpleCache instances on the same directory will crash.
-- Library model: Drive folder = album (simplest starting point)
+- Library model: Drive folder = album, but NOT necessarily a direct child of
+  the library root — real libraries nest differently (e.g. root/Album vs
+  root/Artist/Album, confirmed against an actual Drive with the latter
+  layout). DriveRepository.collectAlbumFolderIds() does a depth-first search
+  from the root and treats a folder as an album as soon as it directly
+  contains an audio file, recursing into subfolders otherwise. This is a
+  correctness-critical detail, not a simplification to "fix later" — a fixed
+  root-children-are-albums assumption silently returns zero tracks on any
+  library with an extra nesting level.
 - Room caches the Drive index so the library browses instantly offline
 - Settings persisted in DataStore (key: cache_limit_bytes, default 2 GB)
 - Music folder root: in-app Drive folder browser (reuse the existing Drive
   API client, no separate Google Picker API/key needed) to choose the root
   folder; its id persisted in DataStore (key: library_root_folder_id).
-  Subfolders directly under it = albums, per the existing folder=album model.
 - Lyrics: Media3's extractor already parses embedded ID3 USLT/SYLT and FLAC
   LYRICS tags as part of format metadata during extraction — read that first,
   no separate tagging library needed. Fall back to LRCLIB (free, no API key,
@@ -142,30 +149,40 @@ Playback foundation implemented:
 - playback/MusicPlaybackService.kt — MediaSessionService wiring ExoPlayer to
   the layered factory
 
-MainActivity: launch now always attempts silent sign-in first (Loading state,
-no button flash); on success it lists Drive audio files and each row is
-tappable, building a MediaItem and playing it through a MediaController bound
-to MusicPlaybackService. `./gradlew assembleDebug` succeeds, and the FULL
-chain — silent sign-in, Drive listing, tap-to-play, auth'd network fetch,
-streaming-cache write, MediaCodec decode, and the system media notification
-with embedded album art (Media3 extracted it from the MP3's ID3 tags) — has
-been verified live on the musicdrive_test emulator. No downloads, folder
-picker, or real UI yet — this is still the tap-a-row-in-a-LazyColumn
-smoke-test screen.
+Music folder picker implemented:
+- ui/FolderPickerScreen.kt — navigable Drive folder browser (path stack,
+  Up button, "Use ... as library folder"), backed by DriveRepository.listFolders
+- data/drive/DriveRepository.kt — listLibraryAudioFiles(rootFolderId) does
+  the depth-first album search described above, then one combined query for
+  every found album's tracks
+- SettingsRepository.libraryRootFolderId (DataStore key
+  library_root_folder_id) persists the choice across launches
+
+MainActivity: launch attempts silent sign-in first (Loading state, no button
+flash); on success, if no library root is set yet it shows FolderPickerScreen,
+otherwise it loads listLibraryAudioFiles(rootId) straight away. A "Change
+library folder" row re-opens the picker. Each track row is tappable, building
+a MediaItem and playing it through a MediaController bound to
+MusicPlaybackService. `./gradlew assembleDebug` succeeds, and the FULL chain
+— silent sign-in, folder picker browsing real Drive folders, recursive album
+discovery through an actual root/Artist/Album layout, tap-to-play, auth'd
+network fetch, streaming-cache write, MediaCodec decode, and the system media
+notification with embedded album art — has been verified live on the
+musicdrive_test emulator. Still the tap-a-row-in-a-LazyColumn smoke-test
+screen, not real UI yet.
 
 ## Next steps
-1. Music folder picker: in-app Drive folder browser, persist chosen root
-   folder id in DataStore, scope the library index to it
-2. Material 3 UI pass: library grid, album detail view, mini-player + full
+1. Material 3 UI pass: library grid, album detail view, mini-player + full
    player (YouTube Music-style layout, not visual clone)
-3. Lyrics: embedded-tag extraction via Media3, LRCLIB fallback
-4. Automatic album covers: embedded-art extraction via Media3, iTunes Search
+2. Lyrics: embedded-tag extraction via Media3, LRCLIB fallback
+3. Automatic album covers: embedded-art extraction via Media3, iTunes Search
    API fallback
-5. Android Auto: MediaLibraryService browsing tree + automotive app
+4. Android Auto: MediaLibraryService browsing tree + automotive app
    descriptor
-6. Downloads: Media3 DownloadManager writing into the download cache,
+5. Downloads: Media3 DownloadManager writing into the download cache,
    per-song/per-album, never evicted
-7. Room-cached Drive index (currently every launch re-lists all of Drive)
+6. Room-cached Drive index (currently every launch re-runs the recursive
+   album search and re-lists tracks)
 
 ## Reference
 - androidx/media demo apps are the canonical reference for DownloadManager
