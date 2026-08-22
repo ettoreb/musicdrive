@@ -29,6 +29,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.media3.common.MediaItem
+import androidx.media3.common.MediaMetadata
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
@@ -49,9 +50,11 @@ import com.ettore.musicdrive.ui.FolderPickerScreen
 import com.ettore.musicdrive.ui.FullPlayerScreen
 import com.ettore.musicdrive.ui.LibraryScreen
 import com.ettore.musicdrive.ui.MiniPlayerBar
+import com.ettore.musicdrive.ui.QueueScreen
 import com.ettore.musicdrive.ui.ScreenHeader
 import com.ettore.musicdrive.ui.groupByArtist
 import com.ettore.musicdrive.ui.rememberPlayerUiState
+import com.ettore.musicdrive.ui.rememberQueueState
 import com.ettore.musicdrive.ui.theme.MusicDriveTheme
 import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.MoreExecutors
@@ -122,6 +125,10 @@ class MainActivity : ComponentActivity() {
             MediaItem.Builder()
                 .setMediaId(track.id)
                 .setUri("https://www.googleapis.com/drive/v3/files/${track.id}?alt=media")
+                // Best-guess metadata (the Drive filename) so the queue has something to
+                // show for tracks Media3 hasn't decoded yet; real ID3 metadata overrides
+                // this automatically once a track actually starts playing.
+                .setMediaMetadata(MediaMetadata.Builder().setTitle(track.name).setAlbumTitle(album.name).build())
                 .build()
         }
         controller.setMediaItems(mediaItems, startIndex, 0L)
@@ -165,6 +172,7 @@ private fun MusicDriveApp(
     var state by remember { mutableStateOf<AppState>(AppState.Loading) }
     var libraryRoute by remember { mutableStateOf<LibraryRoute>(LibraryRoute.Artists) }
     var isPlayerExpanded by remember { mutableStateOf(false) }
+    var isQueueVisible by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
     suspend fun loadLibrary(rootFolderId: String, rootFolderName: String?) {
@@ -218,6 +226,7 @@ private fun MusicDriveApp(
     }
 
     val playerUiState = rememberPlayerUiState(mediaController)
+    val queueState = rememberQueueState(mediaController)
 
     Box(modifier = Modifier.fillMaxSize()) {
         Scaffold { innerPadding ->
@@ -327,6 +336,18 @@ private fun MusicDriveApp(
                 onPreviousClick = { mediaController?.seekToPreviousMediaItem() },
                 onSeek = { positionMs -> mediaController?.seekTo(positionMs) },
                 onCollapse = { isPlayerExpanded = false },
+                onOpenQueue = { isQueueVisible = true },
+            )
+        }
+
+        if (isQueueVisible) {
+            QueueScreen(
+                state = queueState,
+                onTrackClick = { index ->
+                    mediaController?.seekTo(index, 0L)
+                    isQueueVisible = false
+                },
+                onBack = { isQueueVisible = false },
             )
         }
     }

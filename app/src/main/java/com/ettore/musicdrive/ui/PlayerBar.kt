@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
@@ -185,6 +186,7 @@ fun FullPlayerScreen(
     onPreviousClick: () -> Unit,
     onSeek: (positionMs: Long) -> Unit,
     onCollapse: () -> Unit,
+    onOpenQueue: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val artBitmap = rememberArtBitmap(state.artworkData)
@@ -196,8 +198,13 @@ fun FullPlayerScreen(
             .statusBarsPadding()
             .padding(24.dp),
     ) {
-        IconButton(onClick = onCollapse) {
-            Icon(Icons.Filled.KeyboardArrowDown, contentDescription = "Collapse")
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            IconButton(onClick = onCollapse) {
+                Icon(Icons.Filled.KeyboardArrowDown, contentDescription = "Collapse")
+            }
+            IconButton(onClick = onOpenQueue) {
+                Icon(Icons.AutoMirrored.Filled.QueueMusic, contentDescription = "Queue")
+            }
         }
 
         Spacer(Modifier.weight(1f))

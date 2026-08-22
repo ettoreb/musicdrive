@@ -322,19 +322,38 @@ Album/artist view implemented:
 - Verified live end to end on the emulator: artist list, artist -> albums,
   album -> track detail, and back-navigation at every level all correct.
 
+Queue view implemented:
+- MainActivity's playAlbum() now sets MediaMetadata (title = track name,
+  albumTitle = album name) on every MediaItem when building the playlist,
+  not just mediaId/uri — otherwise tracks Media3 hasn't decoded yet had
+  nothing to show in a queue list (title only gets populated from real ID3
+  once a track actually starts playing).
+- ui/QueueScreen.kt — QueueItem/QueueState + rememberQueueState(controller):
+  same mirroring pattern as rememberPlayerUiState, but listens for
+  onTimelineChanged/onMediaItemTransition and reads the controller's whole
+  playlist (mediaItemCount / getMediaItemAt / currentMediaItemIndex) rather
+  than just the current item. QueueScreen is a full-screen list, current
+  track bold + tinted (primaryContainer), tapping any row does
+  controller.seekTo(index, 0) and collapses back to the full player.
+- FullPlayerScreen gained a queue icon button (top-right) opening it; wired
+  as another top-level overlay in MainActivity alongside the full player
+  (isQueueVisible, same pattern as isPlayerExpanded).
+- Verified live: queue shows the whole album with the currently-playing
+  track correctly highlighted; tapping an earlier/later track jumps
+  playback there (confirmed via dumpsys media_session's active item id)
+  and returns to the full player showing the new track.
+
 ## Next steps
 Reprioritized 2026-08-22 per explicit user ordering (was: lyrics, Android
 Auto, downloads, Room index, queue view). Playback optimization, the
-Room-cached index, and the album/artist view (previously #1-#3) are all
-done — see above.
-1. Queue view (the full player has next/prev but no visible upcoming-tracks
-   list yet)
-2. Lyrics: embedded-tag extraction via Media3, LRCLIB fallback
-3. Downloads: Media3 DownloadManager writing into the download cache,
+Room-cached index, the album/artist view, and the queue view (previously
+#1-#4) are all done — see above.
+1. Lyrics: embedded-tag extraction via Media3, LRCLIB fallback
+2. Downloads: Media3 DownloadManager writing into the download cache,
    per-song/per-album, never evicted
-4. Android Auto: MediaLibraryService browsing tree + automotive app
+3. Android Auto: MediaLibraryService browsing tree + automotive app
    descriptor
-5. (not user-ordered, opportunistic) Merge multi-disc release folders
+4. (not user-ordered, opportunistic) Merge multi-disc release folders
    (CD1/CD2/Disc N) into a single album instead of showing each disc as
    its own album — see "Album/artist view" above
 

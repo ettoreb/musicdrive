@@ -18,8 +18,9 @@ lyrics, and Android Auto are still to come.
 | Music folder picker (choose Drive library root) | ✅ Working |
 | Artist list → album grid → album detail (Material 3) | ✅ Working |
 | Automatic album covers (embedded art + iTunes fallback) | ✅ Working |
-| Playback (Media3/ExoPlayer, background, notification, queue) | ✅ Working |
+| Playback (Media3/ExoPlayer, background, notification) | ✅ Working |
 | Mini-player + full-screen player (expand/collapse, seek, skip) | ✅ Working |
+| Queue view (see and jump to any upcoming/previous track) | ✅ Working |
 | Streaming cache (configurable size, LRU eviction) | ✅ Working (eviction limit not yet user-facing) |
 | Room-cached library index (instant browse on relaunch) | ✅ Working |
 | Permanent offline downloads | ⏳ Planned |
