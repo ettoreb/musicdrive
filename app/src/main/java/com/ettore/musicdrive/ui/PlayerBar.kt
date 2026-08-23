@@ -4,6 +4,7 @@ import android.graphics.BitmapFactory
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -24,6 +25,7 @@ import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Repeat
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material3.FilledIconButton
@@ -43,14 +45,18 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.session.MediaController
+import androidx.palette.graphics.Palette
 import kotlinx.coroutines.delay
 
 data class PlayerUiState(
@@ -63,6 +69,7 @@ data class PlayerUiState(
     val durationMs: Long = 0L,
     /** The current track's embedded artwork, as Media3 already extracted it while decoding the stream. */
     val artworkData: ByteArray? = null,
+    val repeatMode: Int = Player.REPEAT_MODE_OFF,
 ) {
     val hasTrack: Boolean get() = title.isNotEmpty() || artist.isNotEmpty() || isPlaying
 }
@@ -71,6 +78,26 @@ data class PlayerUiState(
 @Composable
 private fun rememberArtBitmap(artworkData: ByteArray?): ImageBitmap? = remember(artworkData) {
     artworkData?.let { bytes -> BitmapFactory.decodeByteArray(bytes, 0, bytes.size)?.asImageBitmap() }
+}
+
+/**
+ * A per-track accent color pulled from the artwork itself (Palette API),
+ * used to tint the full player's background - the same "glow from the
+ * cover" ambient effect YouTube Music/Spotify use. Vibrant swatch first
+ * since it reads best as a background tint; falls back to muted/dominant
+ * when the art has no strongly saturated color (e.g. mostly-white covers).
+ * Decoded once per artwork change, same as [rememberArtBitmap] - not
+ * shared with it to keep that function's existing callers untouched.
+ */
+@Composable
+private fun rememberDominantColor(artworkData: ByteArray?): Color? = remember(artworkData) {
+    artworkData
+        ?.let { bytes -> BitmapFactory.decodeByteArray(bytes, 0, bytes.size) }
+        ?.let { bitmap ->
+            val palette = Palette.from(bitmap).generate()
+            val swatch = palette.vibrantSwatch ?: palette.mutedSwatch ?: palette.dominantSwatch
+            swatch?.rgb?.let { Color(it) }
+        }
 }
 
 /** Mirrors a Media3 MediaController's playback state into Compose state, live. */
@@ -92,6 +119,7 @@ fun rememberPlayerUiState(controller: MediaController?): PlayerUiState {
                 positionMs = controller.currentPosition.coerceAtLeast(0),
                 durationMs = controller.duration.coerceAtLeast(0),
                 artworkData = metadata.artworkData,
+                repeatMode = controller.repeatMode,
             )
         }
         refresh()
@@ -100,6 +128,7 @@ fun rememberPlayerUiState(controller: MediaController?): PlayerUiState {
             override fun onMediaMetadataChanged(mediaMetadata: MediaMetadata) = refresh()
             override fun onIsPlayingChanged(isPlaying: Boolean) = refresh()
             override fun onPlaybackStateChanged(playbackState: Int) = refresh()
+            override fun onRepeatModeChanged(repeatMode: Int) = refresh()
         }
         controller.addListener(listener)
         onDispose { controller.removeListener(listener) }
@@ -193,14 +222,34 @@ fun FullPlayerScreen(
     onCollapse: () -> Unit,
     onOpenQueue: () -> Unit,
     onOpenLyrics: () -> Unit,
+    onToggleRepeat: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val artBitmap = rememberArtBitmap(state.artworkData)
+    val dominantColor = rememberDominantColor(state.artworkData)
+    // Accumulated horizontal drag since the gesture started; a swipe past the
+    // threshold on release skips forward/back, like a mini cover carousel.
+    var dragTotal by remember { mutableStateOf(0f) }
 
+    // Surface (not a plain .background() modifier) so it propagates the correct text
+    // color to every un-colored Text below via LocalContentColor - this screen is an
+    // overlay rendered outside the Scaffold that normally provides that, and a bare
+    // background() modifier doesn't set it, which silently defaulted to black-on-black
+    // text in dark mode (found live, real bug, not a color-tuning nitpick).
+    Surface(modifier = modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surface) {
+    Box(modifier = Modifier.fillMaxSize()) {
+    // Per-track ambient glow from the album art's dominant color, fading into the
+    // theme surface - purely decorative, drawn behind everything else, so it never
+    // affects the LocalContentColor propagation Surface above sets up for the text.
+    if (dominantColor != null) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Brush.verticalGradient(listOf(dominantColor.copy(alpha = 0.35f), Color.Transparent))),
+        )
+    }
     Column(
-        modifier = modifier
-            .fillMaxSize()
-            .background(MaterialTheme.colorScheme.surface)
+        modifier = Modifier
             .statusBarsPadding()
             .padding(24.dp),
     ) {
@@ -225,7 +274,20 @@ fun FullPlayerScreen(
                 .fillMaxWidth()
                 .aspectRatio(1f)
                 .clip(RoundedCornerShape(16.dp))
-                .background(MaterialTheme.colorScheme.primaryContainer),
+                .background(MaterialTheme.colorScheme.primaryContainer)
+                .pointerInput(onNextClick, onPreviousClick) {
+                    detectHorizontalDragGestures(
+                        onDragStart = { dragTotal = 0f },
+                        onDragEnd = {
+                            val threshold = 120f
+                            if (dragTotal <= -threshold) onNextClick()
+                            else if (dragTotal >= threshold) onPreviousClick()
+                        },
+                    ) { change, dragAmount ->
+                        change.consume()
+                        dragTotal += dragAmount
+                    }
+                },
             contentAlignment = Alignment.Center,
         ) {
             if (artBitmap != null) {
@@ -244,7 +306,21 @@ fun FullPlayerScreen(
             }
         }
 
-        Spacer(Modifier.height(32.dp))
+        Row(modifier = Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.Center) {
+            IconButton(onClick = onToggleRepeat) {
+                Icon(
+                    Icons.Filled.Repeat,
+                    contentDescription = if (state.repeatMode == Player.REPEAT_MODE_OFF) "Repeat album: off" else "Repeat album: on",
+                    tint = if (state.repeatMode == Player.REPEAT_MODE_OFF) {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    } else {
+                        MaterialTheme.colorScheme.primary
+                    },
+                )
+            }
+        }
+
+        Spacer(Modifier.height(24.dp))
 
         Text(
             state.title.ifBlank { "Loading…" },
@@ -297,6 +373,8 @@ fun FullPlayerScreen(
         }
 
         Spacer(Modifier.weight(1f))
+    }
+    }
     }
 }
 

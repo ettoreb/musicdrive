@@ -12,9 +12,9 @@ private val Context.settingsDataStore by preferencesDataStore(name = "settings")
 
 enum class ThemeMode { SYSTEM, LIGHT, DARK }
 
-enum class LibraryViewMode { HOME, ARTISTS, ALBUMS }
+enum class LibraryViewMode { ARTISTS, ALBUMS }
 
-enum class AlbumSortMode { NAME, TRACK_COUNT }
+enum class AlbumSortMode { NAME, TRACK_COUNT, YEAR }
 
 class SettingsRepository(private val context: Context) {
 
@@ -45,9 +45,9 @@ class SettingsRepository(private val context: Context) {
         context.settingsDataStore.edit { prefs -> prefs[THEME_MODE_KEY] = mode.name }
     }
 
-    /** Which top-level browse tab (Artists vs. flat Albums grid) was open last, so it's remembered across launches. */
+    /** Which sub-view of the Library tab (Artists vs. flat Albums grid) was open last, so it's remembered across launches. */
     val libraryViewMode: Flow<LibraryViewMode> = context.settingsDataStore.data.map { prefs ->
-        prefs[LIBRARY_VIEW_MODE_KEY]?.let { runCatching { LibraryViewMode.valueOf(it) }.getOrNull() } ?: LibraryViewMode.HOME
+        prefs[LIBRARY_VIEW_MODE_KEY]?.let { runCatching { LibraryViewMode.valueOf(it) }.getOrNull() } ?: LibraryViewMode.ARTISTS
     }
 
     suspend fun setLibraryViewMode(mode: LibraryViewMode) {
@@ -55,7 +55,7 @@ class SettingsRepository(private val context: Context) {
     }
 
     val albumSortMode: Flow<AlbumSortMode> = context.settingsDataStore.data.map { prefs ->
-        prefs[ALBUM_SORT_MODE_KEY]?.let { runCatching { AlbumSortMode.valueOf(it) }.getOrNull() } ?: AlbumSortMode.NAME
+        prefs[ALBUM_SORT_MODE_KEY]?.let { runCatching { AlbumSortMode.valueOf(it) }.getOrNull() } ?: AlbumSortMode.YEAR
     }
 
     suspend fun setAlbumSortMode(mode: AlbumSortMode) {

@@ -33,9 +33,11 @@ import coil3.compose.AsyncImage
 import com.ettore.musicdrive.data.drive.DriveAlbum
 import com.ettore.musicdrive.data.local.AlbumSortMode
 
-fun List<DriveAlbum>.sortedByMode(mode: AlbumSortMode): List<DriveAlbum> = when (mode) {
+fun List<DriveAlbum>.sortedByMode(mode: AlbumSortMode, yearOf: (DriveAlbum) -> Int? = { null }): List<DriveAlbum> = when (mode) {
     AlbumSortMode.NAME -> sortedBy { it.name }
     AlbumSortMode.TRACK_COUNT -> sortedByDescending { it.tracks.size }
+    // Unresolved years (still being looked up) sort to the end rather than the top.
+    AlbumSortMode.YEAR -> sortedWith(compareByDescending<DriveAlbum> { yearOf(it) ?: Int.MIN_VALUE }.thenBy { it.name })
 }
 
 @Composable
@@ -53,11 +55,11 @@ fun LibraryScreen(
     }
 
     LazyVerticalGrid(
-        columns = GridCells.Adaptive(minSize = 150.dp),
+        columns = GridCells.Adaptive(minSize = GRID_TILE_MIN_SIZE),
         modifier = modifier.fillMaxSize(),
-        contentPadding = PaddingValues(16.dp),
-        horizontalArrangement = Arrangement.spacedBy(16.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
+        contentPadding = PaddingValues(GRID_SPACING),
+        horizontalArrangement = Arrangement.spacedBy(GRID_SPACING),
+        verticalArrangement = Arrangement.spacedBy(GRID_SPACING),
     ) {
         items(albums, key = { it.id }) { album ->
             AlbumGridItem(album = album, onClick = { onAlbumClick(album) }, resolveArt = resolveArt)
@@ -100,11 +102,6 @@ private fun AlbumGridItem(album: DriveAlbum, onClick: () -> Unit, resolveArt: su
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.padding(top = 8.dp),
-        )
-        Text(
-            "${album.tracks.size} track" + if (album.tracks.size == 1) "" else "s",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
     }
 }

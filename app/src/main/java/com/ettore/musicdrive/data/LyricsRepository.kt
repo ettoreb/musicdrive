@@ -11,7 +11,13 @@ import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 
-data class LyricsResult(val lyrics: String?, val isInstrumental: Boolean, val source: String)
+data class LyricsResult(
+    val lyrics: String?,
+    val isInstrumental: Boolean,
+    val source: String,
+    /** Raw LRC-format text (`[mm:ss.xx]line`), when LRCLIB has it. Null for embedded lyrics or plain-only LRCLIB results. */
+    val syncedLyrics: String? = null,
+)
 
 /**
  * Embedded lyrics (extracted live during playback from the track's own ID3
@@ -34,17 +40,17 @@ class LyricsRepository(private val lyricsDao: LyricsDao) {
     ): LyricsResult = withContext(Dispatchers.IO) {
         if (embeddedLyrics != null) {
             val result = LyricsResult(lyrics = embeddedLyrics, isInstrumental = false, source = "embedded")
-            lyricsDao.upsert(LyricsEntity(trackId, result.lyrics, result.source, result.isInstrumental))
+            lyricsDao.upsert(LyricsEntity(trackId, result.lyrics, result.source, result.isInstrumental, result.syncedLyrics))
             return@withContext result
         }
 
         lyricsDao.get(trackId)?.let { cached ->
-            return@withContext LyricsResult(cached.lyrics, cached.isInstrumental, cached.source)
+            return@withContext LyricsResult(cached.lyrics, cached.isInstrumental, cached.source, cached.syncedLyrics)
         }
 
         val result = fetchFromLrcLib(title, artist, album, durationMs)
             ?: LyricsResult(lyrics = null, isInstrumental = false, source = "none")
-        lyricsDao.upsert(LyricsEntity(trackId, result.lyrics, result.source, result.isInstrumental))
+        lyricsDao.upsert(LyricsEntity(trackId, result.lyrics, result.source, result.isInstrumental, result.syncedLyrics))
         result
     }
 
@@ -66,9 +72,10 @@ class LyricsRepository(private val lyricsDao: LyricsDao) {
             val chosen = findByDuration(results, durationSec) ?: findFirstWithLyrics(results) ?: return null
 
             val plainLyrics = chosen.optString("plainLyrics", "").ifBlank { null }
+            val syncedLyrics = chosen.optString("syncedLyrics", "").ifBlank { null }
             val instrumental = chosen.optBoolean("instrumental", false)
             if (plainLyrics == null && !instrumental) return null
-            LyricsResult(lyrics = plainLyrics, isInstrumental = instrumental, source = "lrclib")
+            LyricsResult(lyrics = plainLyrics, isInstrumental = instrumental, source = "lrclib", syncedLyrics = syncedLyrics)
         } catch (e: Exception) {
             null
         } finally {

@@ -44,6 +44,16 @@ class MusicDriveApplication : Application() {
     lateinit var driveTokenProvider: DriveTokenProvider
         private set
 
+    /**
+     * Set once a sign-in (silent or interactive) has succeeded this process.
+     * MainActivity's composition can be torn down and recreated (e.g. the OS
+     * reclaiming memory while backgrounded) without the process itself
+     * dying; this flag survives that and lets it skip re-invoking Credential
+     * Manager's getCredential() - which can flash a brief system UI even in
+     * "silent" mode - when the session from earlier this process is still good.
+     */
+    var isSignedInThisProcess: Boolean = false
+
     /** Caches the Drive library index (albums + tracks) so it browses instantly on relaunch. */
     lateinit var database: MusicDriveDatabase
         private set

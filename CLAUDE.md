@@ -19,7 +19,9 @@ this file.
 - google-api-client / google-api-services-drive jars collide on
   META-INF/INDEX.LIST and META-INF/DEPENDENCIES; excluded via
   android.packaging.resources.excludes in app/build.gradle.kts.
-- No physical device attached yet (USB/adb unresolved); use emulator for now
+- A physical Pixel 7 (codename `panther`) is available over USB and shows up
+  fine in `adb devices` — the earlier "no physical device" limitation no
+  longer applies; either it or the emulator works for live testing.
 - AVD `musicdrive_test` (Pixel 6, API 34, google_apis x86_64) was created via
   cmdline-tools/sdkmanager+avdmanager (~/Android/Sdk had no cmdline-tools, no
   AVD, no system image initially). Boot with the emulator at
@@ -36,6 +38,30 @@ this file.
   (OS-level `ping` still resolves fine via the other network, so it's easy to
   misdiagnose as a real DNS bug). Fix: `adb shell svc wifi disable` to force
   the emulator onto its cellular (eth0) network, which doesn't flap.
+- Emulator gotcha: after the emulator has been up a long time (many hours,
+  many app restarts), Google Play services itself can start hanging
+  ("Google Play services isn't responding" ANR) or hand back a stale Drive
+  access token that 401s every request even after Retry — this is emulator
+  resource exhaustion, not an app bug (confirmed: happened with zero auth
+  code changes in the diff). Fix: fully kill the emulator (`adb emu kill`,
+  then `kill -9` the qemu-system process if it lingers) and boot fresh
+  rather than debugging it in place.
+
+## Common commands
+- Build debug APK: `./gradlew assembleDebug`
+- Install to running emulator/device: `./gradlew installDebug`
+- Unit tests (JVM, `app/src/test`): `./gradlew test`
+- Instrumented tests (`app/src/androidTest`, needs a booted
+  emulator/device): `./gradlew connectedAndroidTest`
+- Run a single test class: `./gradlew test --tests "com.ettore.musicdrive.SomeTest"`
+- Lint: `./gradlew lint`
+- `local.properties` must contain `GOOGLE_WEB_CLIENT_ID` (see Auth section)
+  before any build that touches sign-in, or the OAuth client id is empty at
+  runtime — build itself still succeeds either way.
+- No real unit/instrumented tests exist yet beyond the default
+  `ExampleUnitTest` template; verification so far has been live, manual
+  testing on the `musicdrive_test` emulator (see entries under Current
+  status).
 
 ## Core requirements
 1. Stream audio files from Google Drive
@@ -572,9 +598,144 @@ Home dashboard (most-played songs grid) implemented:
   (confirmed via dumpsys media_session's active item id) within its whole
   album's queue.
 
+UI/UX overhaul and navigation rework implemented (a large batch of
+user-requested fixes and features, done together — see git log for the
+individual commits):
+- Dark mode readability: the REAL bug wasn't the color palette, it was that
+  `SettingsScreen`/`FullPlayerScreen`/`QueueScreen`/`LyricsScreen` are
+  rendered as overlays outside the `Scaffold` that normally sets
+  `LocalContentColor` (via `Surface`'s `contentColorFor`) — a bare
+  `.background()` modifier doesn't set it, so every `Text` without an
+  explicit `color=` silently fell back to Compose's hardcoded default
+  (black), invisible on a dark background. Only noticed once dark mode was
+  actually tested live (must have been tested in light mode previously).
+  Fixed by wrapping each in `Surface(color = MaterialTheme.colorScheme.surface)`
+  instead of a plain background modifier. `ui/theme/Theme.kt`'s dark scheme
+  is also now explicit (brighter `onSurface`/`onSurfaceVariant`) rather than
+  relying on M3's stock `darkColorScheme()`.
+- Album detail screen redesigned YouTube-Music-style: cover art on top
+  (previously had none), artist name, a single "Download album" pill button,
+  clean numbered track list with NO per-track download icons anymore
+  (per-track download is gone from the UI entirely — album-only downloads).
+  Track titles everywhere now strip the file extension
+  (`ui/TextFormatting.kt`'s `withoutAudioExtension()`).
+- Home/Albums/Artists/Library all use an adaptive ~3-column grid
+  (`ui/GridDefaults.kt`: `GRID_TILE_MIN_SIZE = 100.dp` tuned so phone widths
+  land on exactly 3 columns, wider screens get more). Artist list converted
+  from a row-list to a grid of circular tiles (art = first album's cover,
+  no per-artist art concept exists). Track-count subtitles removed from
+  album tiles (explicitly called out as a useless metric).
+- Album sort gained a YEAR mode (now the default) — release year isn't
+  captured anywhere else in the app, so `AlbumArtRepository.resolveYear()`
+  reads it embedded-tag-first (`MediaMetadataRetriever.METADATA_KEY_YEAR`)
+  then iTunes-fallback (`releaseDate` field), cached forever in a new
+  `AlbumYearEntity`/`AlbumYearDao` (Room v4). Resolved eagerly in the
+  background as soon as the library loads (`MainActivity`), NOT lazily like
+  art, since sorting needs every album's year at once — but bounded to 3
+  concurrent resolutions via a `Semaphore`: firing one `MediaMetadataRetriever`
+  open per album unbounded (37 albums at once, live library) starved the
+  binder thread pool and stalled the whole app, a real bug found live via
+  logcat's repeated "binder thread pool starved" before the semaphore fix.
+- Settings: storage size is now a dialog (opened from a "Storage" row) with
+  a `Slider` snapped to the same 5 presets, replacing the old radio-button
+  list. "Change library folder" moved from the top bar into Settings.
+- Sign-in flash mitigation: `MusicDriveApplication.isSignedInThisProcess`
+  (plain var, survives Activity recreation within the same process) gates
+  the initial silent-sign-in `LaunchedEffect` so re-entering composition
+  (e.g. the OS reclaiming/recreating the Activity while backgrounded)
+  doesn't re-invoke Credential Manager's `getCredential()` — which can flash
+  a brief system UI even in "silent" mode. A genuine cold process restart
+  can still flash once; that part is a platform limitation, not fixable
+  from app code.
+- Swipe-back navigation: `androidx.activity.compose.BackHandler` added at
+  every level that previously fell through to exiting the app — drill-down
+  routes (`AlbumDetail`/`ArtistAlbums`) step back like their on-screen
+  arrow, each overlay (full player, queue, lyrics, settings-as-overlay
+  [later replaced by a route, see below], the folder picker's path stack)
+  closes/steps up instead. Registered in inner-to-outer order so the
+  innermost open thing wins when several are enabled at once.
+- Full player: swipe left/right on the cover art skips next/previous
+  (`detectHorizontalDragGestures`, threshold ~120px). A repeat-album toggle
+  (icon below the cover, tinted `primary` when active) cycles
+  `Player.REPEAT_MODE_OFF`/`REPEAT_MODE_ALL` on the shared `MediaController`.
+- Home page gained a "Liked Songs" card (a synthetic `DriveAlbum` built
+  client-side from the existing most-played-tracks query — id
+  `"liked-songs"`, never touches Drive/art-resolution since it's not a real
+  album) and an "Artists you've been playing" row: per-artist totals
+  computed client-side by summing `PlayCountEntity.playCount` grouped by
+  each track's album's `artistHint` (no new Room table needed — reuses
+  `PlayCountDao.observeAll()`, a new unranked query alongside the existing
+  `observeTopTracks(limit)`).
+- New app icon (`res/mipmap-*/ic_launcher*.webp` + adaptive
+  `res/drawable-xxxhdpi/ic_launcher_foreground.png` +
+  `@color/ic_launcher_background`): a pink rounded-square cloud+play mark,
+  built from a designer-supplied flat PNG by geometrically masking the
+  rounded-square crop to transparent corners, then color-keying out the
+  pink to isolate just the white glyph for the adaptive foreground layer
+  (ImageMagick, not a design tool — ad hoc but the result is clean, verified
+  live on both devices with no artifacts).
+- Dynamic per-track color: `ui/PlayerBar.kt`'s `rememberDominantColor()`
+  runs `androidx.palette.graphics.Palette` (new `androidx-palette-ktx`
+  dependency) over the decoded artwork bitmap (vibrant → muted → dominant
+  swatch fallback chain) and glows it as a top-fading gradient behind the
+  full player — verified live, a U2 sepia cover correctly produces a warm
+  amber glow.
+- Offline album art caching hardened: `AlbumArtRepository`'s disk cache
+  moved from `cacheDir` to `filesDir` (survives OS cache-clearing, same
+  reasoning as the download cache) and the iTunes-fallback path now
+  actually downloads and writes the image bytes to that same disk cache
+  instead of just handing Coil a remote URL to fetch-and-cache-maybe —
+  `resolveArt()`'s return type is now always `File?`, never a URL string.
+- Bottom navigation replaces the old top FilterChip row: Home / Search /
+  Library / Settings, via a `NavigationBar`+`NavigationBarItem`s in
+  `Scaffold`'s `bottomBar` (only shown once `AppState.LibraryLoaded`).
+  `LibraryRoute` restructured to `Home`/`Search`/`Library`/`Settings` as
+  the four bottom-nav roots, with `ArtistAlbums`/`AlbumDetail` still
+  drilling down from `Library`. `SettingsRepository.LibraryViewMode`
+  dropped `HOME` (now only `ARTISTS`/`ALBUMS`, governing the Library tab's
+  internal toggle — Home is a permanent top-level destination now, not a
+  nested view mode) and defaults to `ARTISTS`. Settings changed from a
+  Boolean-flag overlay to a real route rendered inside the Scaffold (so it
+  needed its `.statusBarsPadding()` removed — double-padded once
+  `innerPadding` started covering that).
+- New `ui/SearchScreen.kt`: filters the already-loaded in-memory library
+  (no new Drive query or index needed at personal-library scale) by
+  substring match on album name/artistHint/track name, showing separate
+  "Albums" and "Songs" result sections; tapping a track result plays that
+  album from that track same as everywhere else. Verified live: "beautiful"
+  correctly matched the same song across 3 different U2 albums.
+- Synced lyrics with word-level highlighting (`ui/LyricsScreen.kt`):
+  LRCLIB's `syncedLyrics` field (raw LRC `[mm:ss.xx]line` text, previously
+  ignored — only `plainLyrics` was fetched) is now captured, cached in a
+  new `LyricsEntity.syncedLyrics` column (Room v5), and parsed into timed
+  lines. LRCLIB only has LINE-level sync, not word-level, so word-by-word
+  highlighting is SYNTHESIZED by evenly distributing each line's words
+  across that line's own timespan (its start to the next line's start) —
+  the same trick Metrolist (see Reference below) uses for plain
+  line-synced sources, not real per-word timing. A local ~80ms position
+  ticker (`rememberLiveLyricsPositionMs`, stops polling while paused)
+  drives the wipe at finer grain than the shared 500ms player-bar poll.
+  Falls back to the existing plain scrolling text when a track has no
+  synced lyrics (embedded USLT is always unsynced by spec; LRCLIB
+  sometimes only has plain lyrics for a given match). Verified live end to
+  end on U2's "With or Without You": active line renders bold with words
+  turning `primary`-colored progressively, inactive lines dim, and the
+  `LazyColumn` auto-scrolls to keep a couple of already-sung lines visible
+  above the active one.
+- Researched other open-source Android music players (Metrolist 12.1k★,
+  Auxio 4.2k★, Rhythm, BoomingMusic, InnerTune/OuterTune, Kanade) for UX
+  ideas — all GPL-3.0, so patterns are fair game to reimplement
+  independently but files aren't copyable without triggering copyleft.
+  Metrolist is the standout reference (see Reference section below).
+
 ## Next steps
 1. Android Auto: MediaLibraryService browsing tree + automotive app
    descriptor
+2. Not yet re-verified after the UI/UX overhaul: the physical Pixel 7 is
+   still on an older build (everything from bottom-nav onward — dynamic
+   color, hardened art caching, Search, synced lyrics — was only verified
+   on the emulator). Install the latest build there too before considering
+   this batch fully done.
 
 ## Reference
 - androidx/media demo apps are the canonical reference for DownloadManager
@@ -597,3 +758,21 @@ Home dashboard (most-played songs grid) implemented:
     (delete rows not in the new id list, then insert) — good minimal pattern.
   - Android Auto: their automotive_app_desc.xml is the standard AOSP
     `<uses name="media"/>` boilerplate, same as already planned here.
+- Researched (2026-08-23) for lyrics/animation/design/stats ideas:
+  Metrolist (github.com/MetrolistGroup/Metrolist, 12.1k★, GPL-3.0) is the
+  standout — actively maintained, Compose+Media3, most feature-rich found.
+  Confirmed the word-highlight-from-line-sync synthesis trick already
+  implemented here. Other things worth revisiting later, NOT yet built:
+  - `SquigglySlider.kt`: hand-drawn wavy `Canvas` seek progress (sine wave
+    that flattens near the thumb), not the stock `Slider` composable.
+  - `PlayingIndicator.kt`: 3-bar "now playing" equalizer icon, each bar
+    independently looping `Animatable.animateTo(Random.nextFloat())` —
+    would fit as a "currently playing" marker on Home/album-detail rows.
+  - A separate "Wrapped"-style annual stats screen, distinct from the
+    always-on Home most-played view, consuming the same
+    `PlayCountEntity`/`lastPlayedAt` data already tracked here.
+  - Auxio (4.2k★, GPL-3.0, View-based not Compose) drives its mini↔full
+    player expand/collapse via a `BottomSheetBehavior` subclass with
+    velocity-based fling — reference for a possible `AnchoredDraggable`
+    swipe-to-expand gesture on the mini player (not implemented; currently
+    tap-to-expand only).

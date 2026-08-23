@@ -4,6 +4,7 @@ import android.content.ComponentName
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
@@ -16,6 +17,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Sort
+import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.LibraryMusic
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -25,9 +29,10 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -39,7 +44,6 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
@@ -76,16 +80,22 @@ import com.ettore.musicdrive.ui.LyricsScreen
 import com.ettore.musicdrive.ui.MiniPlayerBar
 import com.ettore.musicdrive.ui.QueueScreen
 import com.ettore.musicdrive.ui.ScreenHeader
+import com.ettore.musicdrive.ui.SearchScreen
 import com.ettore.musicdrive.ui.SettingsScreen
+import com.ettore.musicdrive.ui.TopArtistItem
+import com.ettore.musicdrive.ui.UNKNOWN_ARTIST
 import com.ettore.musicdrive.ui.groupByArtist
 import com.ettore.musicdrive.ui.rememberPlayerUiState
 import com.ettore.musicdrive.ui.rememberQueueState
 import com.ettore.musicdrive.ui.sortedByMode
 import com.ettore.musicdrive.ui.theme.MusicDriveTheme
+import com.ettore.musicdrive.ui.withoutAudioExtension
 import com.google.common.util.concurrent.ListenableFuture
 import com.google.common.util.concurrent.MoreExecutors
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 
 @UnstableApi
 class MainActivity : ComponentActivity() {
@@ -122,7 +132,7 @@ class MainActivity : ComponentActivity() {
         tokenProvider.setAuthorizer(driveAuthorizationManager)
         driveRepository = DriveRepository(tokenProvider)
         libraryRepository = LibraryRepository(driveRepository, app.database.libraryDao())
-        albumArtRepository = AlbumArtRepository(this, tokenProvider)
+        albumArtRepository = AlbumArtRepository(this, tokenProvider, app.database.albumYearDao())
         settingsRepository = app.settingsRepository
         lyricsRepository = LyricsRepository(app.database.lyricsDao())
         downloadTracker = app.downloadTracker
@@ -150,6 +160,8 @@ class MainActivity : ComponentActivity() {
                     playStatsRepository = playStatsRepository,
                     mediaController = mediaController,
                     onPlayAlbum = ::playAlbum,
+                    isSignedInThisProcess = app.isSignedInThisProcess,
+                    onSignedIn = { app.isSignedInThisProcess = true },
                 )
             }
         }
@@ -164,7 +176,9 @@ class MainActivity : ComponentActivity() {
                 // Best-guess metadata (the Drive filename) so the queue has something to
                 // show for tracks Media3 hasn't decoded yet; real ID3 metadata overrides
                 // this automatically once a track actually starts playing.
-                .setMediaMetadata(MediaMetadata.Builder().setTitle(track.name).setAlbumTitle(album.name).build())
+                .setMediaMetadata(
+                    MediaMetadata.Builder().setTitle(track.name.withoutAudioExtension()).setAlbumTitle(album.name).build(),
+                )
                 .build()
         }
         controller.setMediaItems(mediaItems, startIndex, 0L)
@@ -191,10 +205,21 @@ private sealed class AppState {
 
 private sealed class LibraryRoute {
     data object Home : LibraryRoute()
-    data object Artists : LibraryRoute()
-    data object Albums : LibraryRoute()
+    data object Search : LibraryRoute()
+    data object Library : LibraryRoute()
+    data object Settings : LibraryRoute()
     data class ArtistAlbums(val artist: ArtistSummary) : LibraryRoute()
     data class AlbumDetail(val album: DriveAlbum, val backTo: LibraryRoute) : LibraryRoute()
+}
+
+/** The four permanent bottom-nav destinations; Library covers browsing plus any drill-down within it. */
+private enum class BottomTab { HOME, SEARCH, LIBRARY, SETTINGS }
+
+private fun LibraryRoute.bottomTab(): BottomTab = when (this) {
+    is LibraryRoute.Home -> BottomTab.HOME
+    is LibraryRoute.Search -> BottomTab.SEARCH
+    is LibraryRoute.Settings -> BottomTab.SETTINGS
+    is LibraryRoute.Library, is LibraryRoute.ArtistAlbums, is LibraryRoute.AlbumDetail -> BottomTab.LIBRARY
 }
 
 private const val HOME_GRID_LIMIT = 12
@@ -211,30 +236,30 @@ private fun MusicDriveApp(
     playStatsRepository: PlayStatsRepository,
     mediaController: MediaController?,
     onPlayAlbum: (DriveAlbum, startIndex: Int) -> Unit,
+    isSignedInThisProcess: Boolean,
+    onSignedIn: () -> Unit,
 ) {
     var state by remember { mutableStateOf<AppState>(AppState.Loading) }
     var libraryRoute by remember { mutableStateOf<LibraryRoute>(LibraryRoute.Home) }
     var isPlayerExpanded by remember { mutableStateOf(false) }
     var isQueueVisible by remember { mutableStateOf(false) }
     var isLyricsVisible by remember { mutableStateOf(false) }
-    var isSettingsVisible by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
-    fun topLevelRouteFor(mode: LibraryViewMode): LibraryRoute = when (mode) {
-        LibraryViewMode.HOME -> LibraryRoute.Home
-        LibraryViewMode.ARTISTS -> LibraryRoute.Artists
-        LibraryViewMode.ALBUMS -> LibraryRoute.Albums
-    }
-
-    fun selectTopLevelView(mode: LibraryViewMode) {
-        libraryRoute = topLevelRouteFor(mode)
-        scope.launch { settingsRepository.setLibraryViewMode(mode) }
+    fun selectBottomTab(tab: BottomTab) {
+        libraryRoute = when (tab) {
+            BottomTab.HOME -> LibraryRoute.Home
+            BottomTab.SEARCH -> LibraryRoute.Search
+            BottomTab.LIBRARY -> LibraryRoute.Library
+            BottomTab.SETTINGS -> LibraryRoute.Settings
+        }
     }
 
     suspend fun loadLibrary(rootFolderId: String, rootFolderName: String?) {
         state = AppState.Loading
-        // Reopen on whichever top-level tab (Home/Artists/Albums) the user had open last.
-        libraryRoute = topLevelRouteFor(settingsRepository.libraryViewMode.first())
+        // Always reopens on Home, matching every mainstream music app's launch behavior -
+        // Search/Library/Settings are reachable in one tap from the bottom nav regardless.
+        libraryRoute = LibraryRoute.Home
         // Emits cached data first (if any) for an instant browse, then again once the
         // live Drive fetch lands - the route reset above only happens once, up front,
         // so a background refresh mid-browse doesn't kick the user out of an album.
@@ -254,18 +279,23 @@ private fun MusicDriveApp(
         }
     }
 
+    suspend fun proceedToLibraryOrPicker() {
+        val rootFolderId = settingsRepository.libraryRootFolderId.first()
+        if (rootFolderId == null) {
+            state = AppState.PickingFolder
+        } else {
+            loadLibrary(rootFolderId, rootFolderName = null)
+        }
+    }
+
     fun signInAndProceed(interactive: Boolean) {
         state = AppState.Loading
         scope.launch {
             val signIn = if (interactive) signInManager.signInInteractive() else signInManager.signInSilently()
             when (signIn) {
                 is SignInResult.Success -> {
-                    val rootFolderId = settingsRepository.libraryRootFolderId.first()
-                    if (rootFolderId == null) {
-                        state = AppState.PickingFolder
-                    } else {
-                        loadLibrary(rootFolderId, rootFolderName = null)
-                    }
+                    onSignedIn()
+                    proceedToLibraryOrPicker()
                 }
                 is SignInResult.NoCredential -> {
                     state = AppState.SignedOut
@@ -277,9 +307,18 @@ private fun MusicDriveApp(
         }
     }
 
-    // Try to resume a previously authorized account silently before ever showing the sign-in button.
+    // Try to resume a previously authorized account silently before ever showing the sign-in
+    // button - but only hit Credential Manager once per process. Recomposing this effect (e.g.
+    // the OS recreating the Activity after reclaiming it in the background) would otherwise
+    // re-invoke getCredential() every time, which can flash a brief system UI even in "silent"
+    // mode; isSignedInThisProcess survives that recreation, so once we're already authorized this
+    // process, just re-derive the route from local state instead.
     LaunchedEffect(Unit) {
-        signInAndProceed(interactive = false)
+        if (isSignedInThisProcess) {
+            proceedToLibraryOrPicker()
+        } else {
+            signInAndProceed(interactive = false)
+        }
     }
 
     val playerUiState = rememberPlayerUiState(mediaController)
@@ -287,8 +326,44 @@ private fun MusicDriveApp(
     val downloads by downloadTracker.downloads.collectAsState()
     val cacheLimitBytes by settingsRepository.cacheLimitBytes.collectAsState(initial = SettingsRepository.DEFAULT_CACHE_LIMIT_BYTES)
     val themeMode by settingsRepository.themeMode.collectAsState(initial = ThemeMode.SYSTEM)
-    val albumSortMode by settingsRepository.albumSortMode.collectAsState(initial = AlbumSortMode.NAME)
+    val albumSortMode by settingsRepository.albumSortMode.collectAsState(initial = AlbumSortMode.YEAR)
+    val libraryViewMode by settingsRepository.libraryViewMode.collectAsState(initial = LibraryViewMode.ARTISTS)
     val topTrackCounts by playStatsRepository.observeTopTracks(HOME_GRID_LIMIT).collectAsState(initial = emptyList())
+    val allPlayCounts by playStatsRepository.observeAll().collectAsState(initial = emptyList())
+
+    val loadedAlbums = (state as? AppState.LibraryLoaded)?.albums ?: emptyList()
+
+    // trackId -> (its album, its index within that album) so a Home tile, or the
+    // synthetic Liked Songs playlist, can resume playback the same way AlbumDetailScreen
+    // does (play the whole album starting from that track).
+    val trackLocations = remember(loadedAlbums) {
+        loadedAlbums.flatMap { album ->
+            album.tracks.mapIndexed { index, track -> track.id to Triple(album, track, index) }
+        }.toMap()
+    }
+
+    // Release years aren't known up front (they're resolved lazily, tag-first-then-iTunes,
+    // same as art) but sorting by year needs them for the whole visible list at once, so this
+    // eagerly resolves every loaded album's year in the background as soon as the library loads.
+    // Bounded concurrency: resolving a year opens a MediaMetadataRetriever (a heavyweight,
+    // binder-backed HTTP session) per album - firing one per album at once for a large library
+    // starves the binder thread pool and stalls the whole app (found live: 37 concurrent
+    // launches logged repeated "binder thread pool starved" and the sort never completed).
+    var albumYears by remember { mutableStateOf<Map<String, Int?>>(emptyMap()) }
+    val yearResolveSemaphore = remember { Semaphore(3) }
+    LaunchedEffect(loadedAlbums) {
+        loadedAlbums.forEach { album ->
+            if (album.id !in albumYears) {
+                launch {
+                    yearResolveSemaphore.withPermit {
+                        val year = albumArtRepository.resolveYear(album)
+                        albumYears = albumYears + (album.id to year)
+                    }
+                }
+            }
+        }
+    }
+    val yearOf: (DriveAlbum) -> Int? = { albumYears[it.id] }
 
     // Counts a "play" on every track transition (manual skip, auto-advance, or the
     // initial track of a newly built playlist all count) - simple and good enough
@@ -305,8 +380,29 @@ private fun MusicDriveApp(
         onDispose { controller.removeListener(listener) }
     }
 
+    // Drill-down routes (an album's tracks, or an artist's albums) step back to where they
+    // were opened from, matching their on-screen back arrow, instead of the system default
+    // (which would exit the app). Registered before the overlay BackHandlers below so those
+    // take priority when both are enabled at once (e.g. the full player open on top of an
+    // album's track list).
+    BackHandler(
+        enabled = libraryRoute.let { it is LibraryRoute.AlbumDetail || it is LibraryRoute.ArtistAlbums },
+    ) {
+        when (val route = libraryRoute) {
+            is LibraryRoute.AlbumDetail -> libraryRoute = route.backTo
+            is LibraryRoute.ArtistAlbums -> libraryRoute = LibraryRoute.Library
+            else -> Unit
+        }
+    }
+
     Box(modifier = Modifier.fillMaxSize()) {
-        Scaffold { innerPadding ->
+        Scaffold(
+            bottomBar = {
+                if (state is AppState.LibraryLoaded) {
+                    MusicDriveBottomBar(selected = libraryRoute.bottomTab(), onSelect = ::selectBottomTab)
+                }
+            },
+        ) { innerPadding ->
             Column(
                 modifier = Modifier
                     .fillMaxSize()
@@ -356,22 +452,6 @@ private fun MusicDriveApp(
 
                         is AppState.LibraryLoaded -> when (val route = libraryRoute) {
                             is LibraryRoute.Home -> Column(modifier = Modifier.fillMaxSize()) {
-                                LibraryTopBar(
-                                    folderLabel = "Change library folder" +
-                                        (current.libraryFolderName?.let { " (currently \"$it\")" } ?: ""),
-                                    onChangeFolder = { state = AppState.PickingFolder },
-                                    onOpenSettings = { isSettingsVisible = true },
-                                    selectedView = LibraryViewMode.HOME,
-                                    onSelectView = ::selectTopLevelView,
-                                )
-                                // trackId -> (its album, its index within that album) so a
-                                // Home tile can resume playback the same way AlbumDetailScreen
-                                // does (play the whole album starting from that track).
-                                val trackLocations = remember(current.albums) {
-                                    current.albums.flatMap { album ->
-                                        album.tracks.mapIndexed { index, track -> track.id to Triple(album, track, index) }
-                                    }.toMap()
-                                }
                                 val homeItems = remember(topTrackCounts, trackLocations) {
                                     topTrackCounts.mapNotNull { playCount ->
                                         trackLocations[playCount.trackId]?.let { (album, track, index) ->
@@ -379,73 +459,135 @@ private fun MusicDriveApp(
                                         }
                                     }
                                 }
+                                val likedSongsAlbum = remember(homeItems) {
+                                    if (homeItems.isEmpty()) {
+                                        null
+                                    } else {
+                                        DriveAlbum(
+                                            id = "liked-songs",
+                                            name = "Liked Songs",
+                                            artistHint = null,
+                                            tracks = homeItems.map { it.track },
+                                        )
+                                    }
+                                }
+                                val artistSummaries = remember(current.albums) {
+                                    current.albums.groupByArtist().associateBy { it.name }
+                                }
+                                val topArtists = remember(allPlayCounts, trackLocations, artistSummaries) {
+                                    val totals = mutableMapOf<String, Int>()
+                                    allPlayCounts.forEach { playCount ->
+                                        val album = trackLocations[playCount.trackId]?.first ?: return@forEach
+                                        val artistName = album.artistHint ?: UNKNOWN_ARTIST
+                                        totals[artistName] = (totals[artistName] ?: 0) + playCount.playCount
+                                    }
+                                    totals.entries.sortedByDescending { it.value }.take(6).mapNotNull { (name, total) ->
+                                        artistSummaries[name]?.let { TopArtistItem(it, total) }
+                                    }
+                                }
                                 HomeScreen(
                                     topTracks = homeItems,
+                                    topArtists = topArtists,
+                                    likedSongsCount = likedSongsAlbum?.tracks?.size ?: 0,
                                     onTrackClick = { item ->
                                         onPlayAlbum(item.album, item.trackIndex)
                                         isPlayerExpanded = true
+                                    },
+                                    onArtistClick = { libraryRoute = LibraryRoute.ArtistAlbums(it) },
+                                    onLikedSongsClick = {
+                                        likedSongsAlbum?.let {
+                                            onPlayAlbum(it, 0)
+                                            isPlayerExpanded = true
+                                        }
                                     },
                                     resolveArt = albumArtRepository::resolveArt,
                                     modifier = Modifier.weight(1f),
                                 )
                             }
 
-                            is LibraryRoute.Artists -> Column(modifier = Modifier.fillMaxSize()) {
-                                LibraryTopBar(
-                                    folderLabel = "Change library folder" +
-                                        (current.libraryFolderName?.let { " (currently \"$it\")" } ?: ""),
-                                    onChangeFolder = { state = AppState.PickingFolder },
-                                    onOpenSettings = { isSettingsVisible = true },
-                                    selectedView = LibraryViewMode.ARTISTS,
-                                    onSelectView = ::selectTopLevelView,
-                                )
-                                ArtistListScreen(
-                                    artists = current.albums.groupByArtist(),
-                                    onArtistClick = { libraryRoute = LibraryRoute.ArtistAlbums(it) },
-                                    modifier = Modifier.weight(1f),
-                                )
+                            is LibraryRoute.Search -> SearchScreen(
+                                albums = current.albums,
+                                onAlbumClick = { libraryRoute = LibraryRoute.AlbumDetail(it, backTo = LibraryRoute.Search) },
+                                onTrackClick = { album, index ->
+                                    onPlayAlbum(album, index)
+                                    isPlayerExpanded = true
+                                },
+                                resolveArt = albumArtRepository::resolveArt,
+                                modifier = Modifier.fillMaxSize(),
+                            )
+
+                            is LibraryRoute.Library -> Column(modifier = Modifier.fillMaxSize()) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    FilterChip(
+                                        selected = libraryViewMode == LibraryViewMode.ARTISTS,
+                                        onClick = { scope.launch { settingsRepository.setLibraryViewMode(LibraryViewMode.ARTISTS) } },
+                                        label = { Text("Artists") },
+                                    )
+                                    FilterChip(
+                                        selected = libraryViewMode == LibraryViewMode.ALBUMS,
+                                        onClick = { scope.launch { settingsRepository.setLibraryViewMode(LibraryViewMode.ALBUMS) } },
+                                        label = { Text("Albums") },
+                                    )
+                                }
+                                when (libraryViewMode) {
+                                    LibraryViewMode.ARTISTS -> ArtistListScreen(
+                                        artists = current.albums.groupByArtist(),
+                                        onArtistClick = { libraryRoute = LibraryRoute.ArtistAlbums(it) },
+                                        resolveArt = albumArtRepository::resolveArt,
+                                        modifier = Modifier.weight(1f),
+                                    )
+
+                                    LibraryViewMode.ALBUMS -> Column(modifier = Modifier.weight(1f)) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically,
+                                        ) {
+                                            val albumWord = if (current.albums.size == 1) "album" else "albums"
+                                            Text(
+                                                "${current.albums.size} $albumWord",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            )
+                                            AlbumSortMenuButton(current = albumSortMode, onChange = { mode ->
+                                                scope.launch { settingsRepository.setAlbumSortMode(mode) }
+                                            })
+                                        }
+                                        LibraryScreen(
+                                            albums = current.albums.sortedByMode(albumSortMode, yearOf),
+                                            onAlbumClick = { libraryRoute = LibraryRoute.AlbumDetail(it, backTo = LibraryRoute.Library) },
+                                            resolveArt = albumArtRepository::resolveArt,
+                                            modifier = Modifier.weight(1f),
+                                        )
+                                    }
+                                }
                             }
 
-                            is LibraryRoute.Albums -> Column(modifier = Modifier.fillMaxSize()) {
-                                LibraryTopBar(
-                                    folderLabel = "Change library folder" +
-                                        (current.libraryFolderName?.let { " (currently \"$it\")" } ?: ""),
-                                    onChangeFolder = { state = AppState.PickingFolder },
-                                    onOpenSettings = { isSettingsVisible = true },
-                                    selectedView = LibraryViewMode.ALBUMS,
-                                    onSelectView = ::selectTopLevelView,
-                                )
-                                Row(
-                                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically,
-                                ) {
-                                    val albumWord = if (current.albums.size == 1) "album" else "albums"
-                                    Text(
-                                        "${current.albums.size} $albumWord",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    )
-                                    AlbumSortMenuButton(current = albumSortMode, onChange = { mode ->
-                                        scope.launch { settingsRepository.setAlbumSortMode(mode) }
-                                    })
-                                }
-                                LibraryScreen(
-                                    albums = current.albums.sortedByMode(albumSortMode),
-                                    onAlbumClick = { libraryRoute = LibraryRoute.AlbumDetail(it, backTo = LibraryRoute.Albums) },
-                                    resolveArt = albumArtRepository::resolveArt,
-                                    modifier = Modifier.weight(1f),
-                                )
-                            }
+                            is LibraryRoute.Settings -> SettingsScreen(
+                                libraryFolderLabel = "Change library folder" +
+                                    (current.libraryFolderName?.let { " (currently \"$it\")" } ?: ""),
+                                onChangeFolder = { state = AppState.PickingFolder },
+                                cacheLimitBytes = cacheLimitBytes,
+                                onCacheLimitChange = { bytes -> scope.launch { settingsRepository.setCacheLimitBytes(bytes) } },
+                                themeMode = themeMode,
+                                onThemeModeChange = { mode -> scope.launch { settingsRepository.setThemeMode(mode) } },
+                                defaultAlbumSortMode = albumSortMode,
+                                onDefaultAlbumSortModeChange = { mode -> scope.launch { settingsRepository.setAlbumSortMode(mode) } },
+                                onBack = { libraryRoute = LibraryRoute.Home },
+                                modifier = Modifier.fillMaxSize(),
+                            )
 
                             is LibraryRoute.ArtistAlbums -> Column(modifier = Modifier.fillMaxSize()) {
-                                ScreenHeader(title = route.artist.name, onBack = { libraryRoute = LibraryRoute.Artists }) {
+                                ScreenHeader(title = route.artist.name, onBack = { libraryRoute = LibraryRoute.Library }) {
                                     AlbumSortMenuButton(current = albumSortMode, onChange = { mode ->
                                         scope.launch { settingsRepository.setAlbumSortMode(mode) }
                                     })
                                 }
                                 LibraryScreen(
-                                    albums = route.artist.albums.sortedByMode(albumSortMode),
+                                    albums = route.artist.albums.sortedByMode(albumSortMode, yearOf),
                                     onAlbumClick = { libraryRoute = LibraryRoute.AlbumDetail(it, backTo = route) },
                                     resolveArt = albumArtRepository::resolveArt,
                                     modifier = Modifier.weight(1f),
@@ -455,13 +597,12 @@ private fun MusicDriveApp(
                             is LibraryRoute.AlbumDetail -> AlbumDetailScreen(
                                 album = route.album,
                                 downloads = downloads,
+                                resolveArt = albumArtRepository::resolveArt,
                                 onBack = { libraryRoute = route.backTo },
                                 onTrackClick = { index ->
                                     onPlayAlbum(route.album, index)
                                     isPlayerExpanded = true
                                 },
-                                onDownloadTrack = { track -> downloadTracker.downloadTrack(track, route.album.id) },
-                                onRemoveTrackDownload = { track -> downloadTracker.removeTrack(track.id) },
                                 onDownloadAlbum = { downloadTracker.downloadAlbum(route.album) },
                                 onRemoveAlbumDownload = { downloadTracker.removeAlbum(route.album) },
                             )
@@ -482,6 +623,7 @@ private fun MusicDriveApp(
         }
 
         if (isPlayerExpanded) {
+            BackHandler { isPlayerExpanded = false }
             FullPlayerScreen(
                 state = playerUiState,
                 onPlayPauseClick = {
@@ -493,10 +635,20 @@ private fun MusicDriveApp(
                 onCollapse = { isPlayerExpanded = false },
                 onOpenQueue = { isQueueVisible = true },
                 onOpenLyrics = { isLyricsVisible = true },
+                onToggleRepeat = {
+                    mediaController?.let { controller ->
+                        controller.repeatMode = if (controller.repeatMode == Player.REPEAT_MODE_OFF) {
+                            Player.REPEAT_MODE_ALL
+                        } else {
+                            Player.REPEAT_MODE_OFF
+                        }
+                    }
+                },
             )
         }
 
         if (isQueueVisible) {
+            BackHandler { isQueueVisible = false }
             QueueScreen(
                 state = queueState,
                 onTrackClick = { index ->
@@ -508,6 +660,7 @@ private fun MusicDriveApp(
         }
 
         if (isLyricsVisible) {
+            BackHandler { isLyricsVisible = false }
             LyricsScreen(
                 controller = mediaController,
                 playerState = playerUiState,
@@ -516,57 +669,36 @@ private fun MusicDriveApp(
             )
         }
 
-        if (isSettingsVisible) {
-            SettingsScreen(
-                cacheLimitBytes = cacheLimitBytes,
-                onCacheLimitChange = { bytes -> scope.launch { settingsRepository.setCacheLimitBytes(bytes) } },
-                themeMode = themeMode,
-                onThemeModeChange = { mode -> scope.launch { settingsRepository.setThemeMode(mode) } },
-                defaultAlbumSortMode = albumSortMode,
-                onDefaultAlbumSortModeChange = { mode -> scope.launch { settingsRepository.setAlbumSortMode(mode) } },
-                onBack = { isSettingsVisible = false },
-            )
-        }
     }
 }
 
 @Composable
-private fun LibraryTopBar(
-    folderLabel: String,
-    onChangeFolder: () -> Unit,
-    onOpenSettings: () -> Unit,
-    selectedView: LibraryViewMode,
-    onSelectView: (LibraryViewMode) -> Unit,
-) {
-    Column {
-        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            TextButton(onClick = onChangeFolder, modifier = Modifier.weight(1f)) {
-                Text(folderLabel, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
-            IconButton(onClick = onOpenSettings) {
-                Icon(Icons.Filled.Settings, contentDescription = "Settings")
-            }
-        }
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            FilterChip(
-                selected = selectedView == LibraryViewMode.HOME,
-                onClick = { onSelectView(LibraryViewMode.HOME) },
-                label = { Text("Home") },
-            )
-            FilterChip(
-                selected = selectedView == LibraryViewMode.ARTISTS,
-                onClick = { onSelectView(LibraryViewMode.ARTISTS) },
-                label = { Text("Artists") },
-            )
-            FilterChip(
-                selected = selectedView == LibraryViewMode.ALBUMS,
-                onClick = { onSelectView(LibraryViewMode.ALBUMS) },
-                label = { Text("Albums") },
-            )
-        }
+private fun MusicDriveBottomBar(selected: BottomTab, onSelect: (BottomTab) -> Unit) {
+    NavigationBar {
+        NavigationBarItem(
+            selected = selected == BottomTab.HOME,
+            onClick = { onSelect(BottomTab.HOME) },
+            icon = { Icon(Icons.Filled.Home, contentDescription = null) },
+            label = { Text("Home") },
+        )
+        NavigationBarItem(
+            selected = selected == BottomTab.SEARCH,
+            onClick = { onSelect(BottomTab.SEARCH) },
+            icon = { Icon(Icons.Filled.Search, contentDescription = null) },
+            label = { Text("Search") },
+        )
+        NavigationBarItem(
+            selected = selected == BottomTab.LIBRARY,
+            onClick = { onSelect(BottomTab.LIBRARY) },
+            icon = { Icon(Icons.Filled.LibraryMusic, contentDescription = null) },
+            label = { Text("Library") },
+        )
+        NavigationBarItem(
+            selected = selected == BottomTab.SETTINGS,
+            onClick = { onSelect(BottomTab.SETTINGS) },
+            icon = { Icon(Icons.Filled.Settings, contentDescription = null) },
+            label = { Text("Settings") },
+        )
     }
 }
 
@@ -578,6 +710,10 @@ private fun AlbumSortMenuButton(current: AlbumSortMode, onChange: (AlbumSortMode
             Icon(Icons.AutoMirrored.Filled.Sort, contentDescription = "Sort albums")
         }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+            DropdownMenuItem(
+                text = { Text("Release year (newest first)") },
+                onClick = { onChange(AlbumSortMode.YEAR); expanded = false },
+            )
             DropdownMenuItem(
                 text = { Text("Name (A–Z)") },
                 onClick = { onChange(AlbumSortMode.NAME); expanded = false },

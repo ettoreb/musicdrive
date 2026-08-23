@@ -8,6 +8,8 @@ class PlayStatsRepository(private val playCountDao: PlayCountDao) {
 
     fun observeTopTracks(limit: Int): Flow<List<PlayCountEntity>> = playCountDao.observeTopTracks(limit)
 
+    fun observeAll(): Flow<List<PlayCountEntity>> = playCountDao.observeAll()
+
     suspend fun recordPlay(trackId: String) {
         playCountDao.incrementPlay(trackId, System.currentTimeMillis())
     }

@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -71,56 +72,56 @@ fun QueueScreen(
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .background(MaterialTheme.colorScheme.surface)
-            .statusBarsPadding(),
-    ) {
-        ScreenHeader(title = "Queue", onBack = onBack)
+    // Surface (not a plain .background() modifier) so it propagates the correct text
+    // color to every un-colored Text below via LocalContentColor - see LyricsScreen's
+    // matching comment for why this matters (real dark-mode bug, not a nitpick).
+    Surface(modifier = modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surface) {
+        Column(modifier = Modifier.statusBarsPadding()) {
+            ScreenHeader(title = "Queue", onBack = onBack)
 
-        LazyColumn(modifier = Modifier.fillMaxSize()) {
-            itemsIndexed(state.items, key = { index, item -> "$index-${item.mediaId}" }) { index, item ->
-                val isCurrent = index == state.currentIndex
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(if (isCurrent) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface)
-                        .clickable { onTrackClick(index) }
-                        .padding(horizontal = 16.dp, vertical = 14.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Text(
-                        "${index + 1}",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = if (isCurrent) {
-                            MaterialTheme.colorScheme.onPrimaryContainer
-                        } else {
-                            MaterialTheme.colorScheme.onSurfaceVariant
-                        },
-                        modifier = Modifier.width(32.dp),
-                    )
-                    Column {
+            LazyColumn(modifier = Modifier.fillMaxSize()) {
+                itemsIndexed(state.items, key = { index, item -> "$index-${item.mediaId}" }) { index, item ->
+                    val isCurrent = index == state.currentIndex
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(if (isCurrent) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface)
+                            .clickable { onTrackClick(index) }
+                            .padding(horizontal = 16.dp, vertical = 14.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
                         Text(
-                            item.title.ifBlank { item.mediaId },
-                            style = MaterialTheme.typography.bodyLarge,
-                            fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal,
-                            color = if (isCurrent) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
+                            "${index + 1}",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = if (isCurrent) {
+                                MaterialTheme.colorScheme.onPrimaryContainer
+                            } else {
+                                MaterialTheme.colorScheme.onSurfaceVariant
+                            },
+                            modifier = Modifier.width(32.dp),
                         )
-                        if (item.albumTitle.isNotBlank()) {
+                        Column {
                             Text(
-                                item.albumTitle,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = if (isCurrent) {
-                                    MaterialTheme.colorScheme.onPrimaryContainer
-                                } else {
-                                    MaterialTheme.colorScheme.onSurfaceVariant
-                                },
+                                item.title.ifBlank { item.mediaId },
+                                style = MaterialTheme.typography.bodyLarge,
+                                fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal,
+                                color = if (isCurrent) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface,
                                 maxLines = 1,
                                 overflow = TextOverflow.Ellipsis,
                             )
+                            if (item.albumTitle.isNotBlank()) {
+                                Text(
+                                    item.albumTitle,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = if (isCurrent) {
+                                        MaterialTheme.colorScheme.onPrimaryContainer
+                                    } else {
+                                        MaterialTheme.colorScheme.onSurfaceVariant
+                                    },
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
                         }
                     }
                 }

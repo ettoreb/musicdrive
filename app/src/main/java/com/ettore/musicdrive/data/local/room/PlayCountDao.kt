@@ -17,4 +17,8 @@ interface PlayCountDao {
 
     @Query("SELECT * FROM PlayCountEntity ORDER BY playCount DESC, lastPlayedAt DESC LIMIT :limit")
     fun observeTopTracks(limit: Int): Flow<List<PlayCountEntity>>
+
+    /** Every recorded play count, unranked - used to aggregate per-artist totals client-side (artist isn't tracked here, only per-track). */
+    @Query("SELECT * FROM PlayCountEntity")
+    fun observeAll(): Flow<List<PlayCountEntity>>
 }

@@ -1,5 +1,6 @@
 package com.ettore.musicdrive.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -44,6 +45,10 @@ fun FolderPickerScreen(
     var error by remember { mutableStateOf<String?>(null) }
 
     val currentFolder = path.last()
+
+    // Swiping/pressing back should step up one folder level, same as the "Up" button,
+    // instead of falling through to the system default (which would exit the app).
+    BackHandler(enabled = path.size > 1) { path = path.dropLast(1) }
 
     LaunchedEffect(currentFolder.id) {
         isLoading = true
