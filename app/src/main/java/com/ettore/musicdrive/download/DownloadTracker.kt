@@ -98,4 +98,13 @@ class DownloadTracker(
     fun removeAlbum(album: DriveAlbum) {
         album.tracks.forEach { removeTrack(it.id) }
     }
+
+    /**
+     * Clears every current download regardless of which album it belongs to - doesn't need to
+     * resolve album metadata, so it still works for a download left over from a since-changed
+     * library root that removeAlbum couldn't reach (its DriveAlbum no longer exists to iterate).
+     */
+    fun removeAll() {
+        downloads.value.keys.forEach { removeTrack(it) }
+    }
 }

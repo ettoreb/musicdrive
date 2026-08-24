@@ -11,13 +11,29 @@ import androidx.media3.datasource.cache.CacheSpan
  * stock LeastRecentlyUsedCacheEvictor - a song streamed once yesterday would outlive a
  * song streamed 50 times last week under pure LRU, which isn't what a "most-played"
  * personal library wants. The byte limit can also be changed live (e.g. from a settings
- * slider) without recreating the player or the underlying SimpleCache.
+ * slider) without recreating the player or the underlying SimpleCache. maxBytes is the
+ * user-facing combined "Storage" limit (streaming cache + downloads together); reservedBytes
+ * (bytes already used by permanent downloads) is subtracted from it to get this cache's actual
+ * budget, so one number in Settings governs both without downloads ever being evicted here.
  */
 @UnstableApi
 class AdjustableLruEvictor(initialMaxBytes: Long) : CacheEvictor {
 
     @Volatile
     var maxBytes: Long = initialMaxBytes
+        set(value) {
+            field = value
+            cache?.let { evictCache(it, 0) }
+        }
+
+    /**
+     * Bytes already used by permanent downloads (fed live from DownloadTracker, see
+     * MusicDriveApplication) - the streaming cache's effective budget is maxBytes minus this,
+     * so one combined "Storage" limit in Settings governs both without downloads ever being
+     * auto-evicted themselves (they're a separate SimpleCache this evictor never touches).
+     */
+    @Volatile
+    var reservedBytes: Long = 0
         set(value) {
             field = value
             cache?.let { evictCache(it, 0) }
@@ -69,12 +85,13 @@ class AdjustableLruEvictor(initialMaxBytes: Long) : CacheEvictor {
     }
 
     private fun evictCache(cache: Cache, requiredSpace: Long) {
-        if (currentSize + requiredSpace <= maxBytes) return
+        val effectiveMaxBytes = (maxBytes - reservedBytes).coerceAtLeast(0L)
+        if (currentSize + requiredSpace <= effectiveMaxBytes) return
         val protectedActive = spans.filter { it.key != activeKey }
         val candidates = protectedActive.ifEmpty { spans.toList() }
             .sortedWith(compareBy<CacheSpan> { playCountOf(it) }.thenBy { it.lastTouchTimestamp })
             .iterator()
-        while (currentSize + requiredSpace > maxBytes && candidates.hasNext()) {
+        while (currentSize + requiredSpace > effectiveMaxBytes && candidates.hasNext()) {
             cache.removeSpan(candidates.next())
         }
     }

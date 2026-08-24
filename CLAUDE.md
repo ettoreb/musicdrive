@@ -810,9 +810,121 @@ round of user-reported full-player fixes) implemented:
   `uiautomator dump`, not just visually); lyrics+queue icons sit together
   below the cover.
 
+Android Auto browsing tree implemented, but NOT yet verified live on a head
+unit — see "Next steps" below for exactly what's blocking that:
+- `playback/MusicPlaybackService.kt`: base class changed
+  `MediaSessionService` -> `MediaLibraryService` (a strict superclass in
+  Media3 1.11.0, confirmed via `javap` — `MainActivity`'s existing
+  `SessionToken`/`MediaController` connection needed zero changes). Now
+  builds a `MediaLibrarySession` instead of a plain `MediaSession`, with a
+  `.setSessionActivity(...)` `PendingIntent` pointing at `MainActivity`
+  added (there wasn't one before — verified live that it now shows up in
+  `dumpsys media_session`'s `launchIntent` field). A service-scoped
+  `CoroutineScope` (separate from `MusicDriveApplication`'s) backs the new
+  callback's suspend work and is cancelled in `onDestroy`.
+- `playback/MusicLibrarySessionCallback.kt` (new): the browsing tree —
+  `root -> Most Played (30 tracks) / Albums / Artists -> ... -> tracks`,
+  max depth 4. Reads Room (`LibraryDao.getAlbumsWithTracks`, a cheap
+  one-shot suspend call at personal-library scale) directly rather than
+  `LibraryRepository`'s Flow, and never touches the Drive API — browsing
+  works fully offline off the same cache the phone UI keeps warm. Browse
+  nodes carry no URI; only `onSetMediaItems`/`onAddMediaItems` resolve a
+  tapped track id into a real playable `MediaItem`, and — critically —
+  always expand a single tapped track to its *whole owning album* as the
+  queue (mirroring `MainActivity.playAlbum`'s existing behavior) so
+  skip next/previous work the same regardless of which browse path (Most
+  Played/Albums/Artists/Search) found the track. `onSearch`/
+  `onGetSearchResult` reuse the same substring-match logic as the phone's
+  Search screen (see next bullet). Errors (Room failure, no library root
+  configured) degrade to an empty children list rather than a
+  `LibraryResult` error code — friendlier for a car UI; an unknown
+  `parentId` is the one real error case.
+- `data/LibrarySearch.kt` (new): the album/artist/track substring-match
+  logic extracted out of `ui/SearchScreen.kt` into a shared
+  `List<DriveAlbum>.searchLibrary(query)` so the phone Search screen and
+  Auto's `onSearch` can't drift into different behavior.
+- `playback/ListenableFutureBridge.kt` (new): a small
+  `CoroutineScope.toListenableFuture { suspend block }` helper bridging
+  Room/DataStore suspend calls into Media3's `ListenableFuture`-based
+  callback API, built on Guava's real `SettableFuture` — already
+  transitively on the classpath via `media3-session`/`google-api-client`,
+  confirmed via `./gradlew :app:dependencies`, so no new Gradle dependency
+  was needed for this.
+- `AndroidManifest.xml`: `MusicPlaybackService`'s intent-filter gained
+  `android.media.browse.MediaBrowserService` (the legacy
+  MediaBrowserServiceCompat binding action Android Auto's head-unit-server
+  actually uses to discover/bind the service — Media3's `MediaLibraryService`
+  has a built-in legacy-compat shim, but it only activates with this action
+  declared). New `<meta-data android:name="com.google.android.gms.car.application" .../>`
+  pointing at the new `res/xml/automotive_app_desc.xml`
+  (`<automotiveApp><uses name="media"/></automotiveApp>`).
+- Deliberately out of scope for this pass: album art in the browse tree
+  (would need a new `FileProvider` + content-URI permission surface).
+- Verified live on the `musicdrive_test` emulator (phone side only, see
+  "Next steps"): app launches and plays with no crash after the
+  `MediaLibraryService` migration; `dumpsys media_session` confirms both
+  `state=PLAYING` (phone playback unaffected) and the new `launchIntent`
+  PendingIntent are present on the session.
+
+Unified storage model implemented (from the `cache-storage-roadmap` memory
+item - three deferred storage changes the user asked to revisit):
+- `playback/AdjustableLruEvictor.kt` gained `reservedBytes` (bytes already
+  used by permanent downloads, fed live from `DownloadTracker.downloads` in
+  `MusicDriveApplication.onCreate()`, same collector pattern as `maxBytes`/
+  `playCounts`). `evictCache` now compares against
+  `(maxBytes - reservedBytes).coerceAtLeast(0)`, not raw `maxBytes` - so
+  the Settings "Storage" slider is one combined limit for streaming cache +
+  downloads together, downloads keep their existing never-auto-evicted
+  guarantee (this evictor only ever touches the streaming SimpleCache, never
+  downloadCache), and the streaming cache's real budget just shrinks as
+  downloads grow. Chosen over the alternative (downloads becoming evictable
+  under one true shared pool) specifically to preserve that guarantee - user
+  decision after the two options were laid out concretely.
+- `data/drive/AlbumArtRepository.kt` gained `diskUsageBytes()` (a disk
+  walk over `album_art/`) - shown as an info line in Settings, deliberately
+  NOT folded into the size limit: art is tiny for a personal library (a few
+  MB) and evicting it would hurt browsing UX (grid flickers back to
+  placeholders) for negligible space savings.
+- `download/DownloadTracker.kt` gained `removeAll()` - clears every current
+  download by key without needing to resolve album metadata, so it still
+  works for a download whose `DriveAlbum` no longer exists (e.g. after
+  changing the library root).
+- `ui/SettingsScreen.kt`: "Streaming cache size" renamed "Storage", copy
+  rewritten to explain the combined model plainly; a lightweight stacked
+  usage bar (downloads/streaming-cache/free, as weighted `Box`es in a
+  `Row` - no `Canvas` needed) plus a text breakdown; an inline warning if
+  downloads alone exceed the limit (nothing gets deleted, just surfaced
+  honestly); a new "Downloads" section listing each album's size (grouped from
+  `DownloadRequest.data`, the album id already carried per-request) with
+  per-album and "remove all" actions; `cacheSizeOptions` expanded from
+  `500 MB/1/2/5/10 GB` to `1/2/5/10/15/20 GB` (user request, mid-session).
+- `MainActivity.kt`: `streamingCacheUsageBytes`/`artDiskUsageBytes` are
+  resolved via a `LaunchedEffect(libraryRoute)` that only fires when
+  Settings is the active route (a personal-library-scale disk walk /
+  `Cache.getCacheSpace()` call is cheap but pointless to repeat while the
+  user isn't looking at the Storage section) rather than continuously.
+- Verified live on the emulator: Settings shows real numbers (e.g. "0 MB
+  downloads · 413 MB streaming cache · 2.0 GB limit", "2 MB album art");
+  the storage dialog's slider correctly offers all 6 new presets
+  (confirmed 20 GB reachable at the top end); Cancel correctly leaves the
+  stored limit untouched; Downloads section correctly shows "No downloads
+  yet." on a clean install.
+
 ## Next steps
-1. Android Auto: MediaLibraryService browsing tree + automotive app
-   descriptor
+1. Android Auto: NOT yet verified against a real/DHU head unit — blocked on
+   environment, not code. `musicdrive_test` (a `google_apis` AVD, no Play
+   Store) ships `com.google.android.projection.gearhead` as a
+   non-functional placeholder (`VnLaunchPadActivity` doesn't even exist —
+   confirmed via `adb shell am start`, "Error type 3: Activity class ...
+   does not exist"; this is the AOSP stub normally replaced via Play Store
+   install, which isn't available on this AVD). Getting a real head unit to
+   test against needs either a new `google_apis_playstore` AVD (install
+   Android Auto normally there) or sideloading a real Auto APK from a
+   trusted source — deliberately not done yet, this is a real trust
+   decision the user wants to make explicitly, not something to default on.
+   The Desktop Head Unit tool itself (`extras;google;auto`) IS installed at
+   `~/Android/Sdk/extras/google/auto/desktop-head-unit`, ready to go once a
+   working Auto app is available to pair it with.
 2. Not yet re-verified on the physical Pixel 7: the second half of the
    "Player polish batch" above (shuffle/repeat, lyrics/queue repositioning,
    straight seek bar, least-played-first cache eviction) was only verified

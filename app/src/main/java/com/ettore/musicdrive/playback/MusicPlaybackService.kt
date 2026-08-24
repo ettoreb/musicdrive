@@ -1,18 +1,29 @@
 package com.ettore.musicdrive.playback
 
+import android.app.PendingIntent
+import android.content.Intent
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.session.MediaLibraryService
 import androidx.media3.session.MediaSession
-import androidx.media3.session.MediaSessionService
+import com.ettore.musicdrive.MainActivity
 import com.ettore.musicdrive.MusicDriveApplication
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 
 @UnstableApi
-class MusicPlaybackService : MediaSessionService() {
+class MusicPlaybackService : MediaLibraryService() {
 
     private lateinit var player: ExoPlayer
-    private lateinit var mediaSession: MediaSession
+    private lateinit var mediaLibrarySession: MediaLibrarySession
+
+    // Scoped to this service's own lifecycle (separate from MusicDriveApplication's
+    // process-wide scope) so the browse-tree callback's coroutines are cancelled with it.
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
     override fun onCreate() {
         super.onCreate()
@@ -35,14 +46,24 @@ class MusicPlaybackService : MediaSessionService() {
             .setLoadControl(loadControl)
             .build()
 
-        mediaSession = MediaSession.Builder(this, player).build()
+        // Powers Android Auto's "open app" affordance on the now-playing screen/notification.
+        val sessionActivityPendingIntent = PendingIntent.getActivity(
+            this,
+            0,
+            Intent(this, MainActivity::class.java),
+            PendingIntent.FLAG_IMMUTABLE,
+        )
+        mediaLibrarySession = MediaLibrarySession.Builder(this, player, MusicLibrarySessionCallback(app, serviceScope))
+            .setSessionActivity(sessionActivityPendingIntent)
+            .build()
     }
 
-    override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession = mediaSession
+    override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaLibrarySession = mediaLibrarySession
 
     override fun onDestroy() {
-        mediaSession.release()
+        mediaLibrarySession.release()
         player.release()
+        serviceScope.cancel()
         super.onDestroy()
     }
 }

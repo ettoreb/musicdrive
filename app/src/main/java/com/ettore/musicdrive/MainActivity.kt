@@ -49,6 +49,7 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.cache.Cache
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import com.ettore.musicdrive.auth.ContextDriveAuthorizer
@@ -158,6 +159,7 @@ class MainActivity : ComponentActivity() {
                     settingsRepository = settingsRepository,
                     lyricsRepository = lyricsRepository,
                     downloadTracker = downloadTracker,
+                    streamingCache = app.streamingCache,
                     playStatsRepository = playStatsRepository,
                     mediaController = mediaController,
                     onPlayAlbum = ::playAlbum,
@@ -234,6 +236,7 @@ private fun MusicDriveApp(
     settingsRepository: SettingsRepository,
     lyricsRepository: LyricsRepository,
     downloadTracker: DownloadTracker,
+    streamingCache: Cache,
     playStatsRepository: PlayStatsRepository,
     mediaController: MediaController?,
     onPlayAlbum: (DriveAlbum, startIndex: Int) -> Unit,
@@ -332,6 +335,18 @@ private fun MusicDriveApp(
     val libraryViewMode by settingsRepository.libraryViewMode.collectAsState(initial = LibraryViewMode.ARTISTS)
     val topTrackCounts by playStatsRepository.observeTopTracks(HOME_GRID_LIMIT).collectAsState(initial = emptyList())
     val allPlayCounts by playStatsRepository.observeAll().collectAsState(initial = emptyList())
+
+    // Refreshed each time Settings is opened (not continuously) - a personal-library-scale disk
+    // walk / Cache.getCacheSpace() call is cheap but pointless to repeat while the user isn't
+    // even looking at the Storage section.
+    var streamingCacheUsageBytes by remember { mutableStateOf(0L) }
+    var artDiskUsageBytes by remember { mutableStateOf(0L) }
+    LaunchedEffect(libraryRoute) {
+        if (libraryRoute is LibraryRoute.Settings) {
+            streamingCacheUsageBytes = streamingCache.cacheSpace
+            artDiskUsageBytes = albumArtRepository.diskUsageBytes()
+        }
+    }
 
     val loadedAlbums = (state as? AppState.LibraryLoaded)?.albums ?: emptyList()
 
@@ -583,6 +598,12 @@ private fun MusicDriveApp(
                                 onChangeFolder = { state = AppState.PickingFolder },
                                 cacheLimitBytes = cacheLimitBytes,
                                 onCacheLimitChange = { bytes -> scope.launch { settingsRepository.setCacheLimitBytes(bytes) } },
+                                streamingCacheUsageBytes = streamingCacheUsageBytes,
+                                artDiskUsageBytes = artDiskUsageBytes,
+                                downloads = downloads,
+                                albums = loadedAlbums,
+                                onRemoveDownloadedAlbum = { album -> downloadTracker.removeAlbum(album) },
+                                onRemoveAllDownloads = { downloadTracker.removeAll() },
                                 themeMode = themeMode,
                                 onThemeModeChange = { mode -> scope.launch { settingsRepository.setThemeMode(mode) } },
                                 defaultAlbumSortMode = albumSortMode,

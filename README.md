@@ -37,16 +37,19 @@ folder structure your library already uses.
 - **Synced, karaoke-style lyrics** — embedded ID3 tags first, [LRCLIB](https://lrclib.net)
   fallback, word-by-word highlighting as the track plays.
 - **"Your Stats"** — a Wrapped-style recap of your top songs and artists.
-- **Two independent caches**: a streaming cache with a user-configurable
-  size limit that evicts your least-played tracks first, and a completely
-  separate set of permanent, explicit per-album downloads that are never
-  touched by eviction.
+- **One combined storage limit** in Settings, shared by the streaming cache
+  and your explicit per-album downloads. Downloads are never auto-deleted —
+  the streaming cache just uses whatever room is left, evicting your
+  least-played tracks first. Settings shows exactly what's using space
+  (downloads, streaming cache, album art) and lets you remove downloads
+  individually or all at once.
 - **Survives everything** — background playback with a media notification,
   gapless transitions between an album's tracks, and correct recovery even
   if Android kills the app process mid-song.
 - Material 3 UI throughout, light/dark/system theme.
 
-**Roadmap:** Android Auto support is next.
+**Roadmap:** Android Auto support is next (browsing tree implemented,
+pending head-unit testing).
 
 ## How it works
 
@@ -54,12 +57,13 @@ folder structure your library already uses.
   your chosen root for the first folder(s) that directly contain audio files
   — so both `root/Album` and `root/Artist/Album` layouts work. Cached in
   Room so relaunching browses instantly, refreshing quietly in the background.
-- **Playback**: Media3/ExoPlayer with two separate caches — an
-  auto-managed streaming cache with a user-configurable size cap
-  (least-played-first eviction), and a separate permanent cache for
-  explicit downloads that are never evicted. Tuned for fast tap-to-audio
-  start, gapless transitions between an album's tracks, and survives the
-  OS killing and restarting the app process mid-playback.
+- **Playback**: Media3/ExoPlayer with two separate caches under one
+  user-configurable combined size limit — an auto-managed streaming cache
+  (least-played-first eviction) and a permanent cache for explicit
+  downloads that are never evicted; the streaming cache's real budget is
+  the limit minus whatever downloads are already using. Tuned for fast
+  tap-to-audio start, gapless transitions between an album's tracks, and
+  survives the OS killing and restarting the app process mid-playback.
 - **Auth**: Credential Manager for sign-in, the Identity API's
   `AuthorizationClient` for the separate Drive `drive.readonly` scope
   consent.

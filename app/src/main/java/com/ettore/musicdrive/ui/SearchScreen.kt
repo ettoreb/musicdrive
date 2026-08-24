@@ -36,10 +36,9 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
+import com.ettore.musicdrive.data.TrackMatch
 import com.ettore.musicdrive.data.drive.DriveAlbum
-import com.ettore.musicdrive.data.drive.DriveAudioFile
-
-private data class TrackMatch(val album: DriveAlbum, val track: DriveAudioFile, val index: Int)
+import com.ettore.musicdrive.data.searchLibrary
 
 /**
  * Filters the already-loaded library in memory - the whole library is
@@ -57,26 +56,9 @@ fun SearchScreen(
 ) {
     var query by remember { mutableStateOf("") }
 
-    val matchingAlbums = remember(query, albums) {
-        if (query.isBlank()) {
-            emptyList()
-        } else {
-            albums.filter {
-                it.name.contains(query, ignoreCase = true) || it.artistHint?.contains(query, ignoreCase = true) == true
-            }
-        }
-    }
-    val matchingTracks = remember(query, albums) {
-        if (query.isBlank()) {
-            emptyList()
-        } else {
-            albums.flatMap { album ->
-                album.tracks.mapIndexedNotNull { index, track ->
-                    if (track.name.contains(query, ignoreCase = true)) TrackMatch(album, track, index) else null
-                }
-            }.take(50)
-        }
-    }
+    val results = remember(query, albums) { albums.searchLibrary(query) }
+    val matchingAlbums = results.albums
+    val matchingTracks = results.tracks
 
     Column(modifier = modifier.fillMaxSize().statusBarsPadding()) {
         OutlinedTextField(

@@ -18,6 +18,7 @@ enum class AlbumSortMode { NAME, TRACK_COUNT, YEAR }
 
 class SettingsRepository(private val context: Context) {
 
+    /** The combined "Storage" limit: streaming cache + downloads together (see AdjustableLruEvictor.reservedBytes). Downloads are never auto-evicted regardless of this value - it only bounds how much room the streaming cache gets. */
     val cacheLimitBytes: Flow<Long> = context.settingsDataStore.data.map { prefs ->
         prefs[CACHE_LIMIT_BYTES_KEY] ?: DEFAULT_CACHE_LIMIT_BYTES
     }

@@ -40,6 +40,16 @@ class AlbumArtRepository(
     private val artMemoryCache = mutableMapOf<String, File?>()
     private val yearMemoryCache = mutableMapOf<String, Int?>()
 
+    /**
+     * Total disk space used by cached album art - shown as an info line in Settings. Not
+     * counted against the user's "Storage" limit (that governs the streaming cache + downloads
+     * only): art is tiny for a personal library and always kept, so bounding/evicting it would
+     * hurt browsing UX for negligible space savings.
+     */
+    suspend fun diskUsageBytes(): Long = withContext(Dispatchers.IO) {
+        diskCacheDir.walkTopDown().filter { it.isFile }.sumOf { it.length() }
+    }
+
     suspend fun resolveArt(album: DriveAlbum): File? = withContext(Dispatchers.IO) {
         artMemoryCache[album.id]?.let { return@withContext it }
         if (artMemoryCache.containsKey(album.id)) return@withContext null

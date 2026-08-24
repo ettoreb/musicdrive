@@ -10,7 +10,8 @@ import com.ettore.musicdrive.data.local.room.TrackEntity
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
 
-private fun AlbumWithTracks.toDriveAlbum() = DriveAlbum(
+/** Shared with the Android Auto browse tree (MusicLibrarySessionCallback), which reads Room directly. */
+fun AlbumWithTracks.toDriveAlbum() = DriveAlbum(
     id = album.id,
     name = album.name,
     artistHint = album.artistHint,

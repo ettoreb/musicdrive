@@ -58,7 +58,13 @@ class MusicDriveApplication : Application() {
     lateinit var database: MusicDriveDatabase
         private set
 
-    /** Auto-managed, evictable cache for streamed playback. Bounded by a user-configurable size cap; evicts least-played tracks first (see AdjustableLruEvictor). */
+    /**
+     * Auto-managed, evictable cache for streamed playback. Its effective budget is the
+     * user-configurable "Storage" limit minus whatever downloadCache is already using (one
+     * combined number in Settings governs both caches together; downloads are still never
+     * auto-evicted, since this evictor only ever touches its own SimpleCache); evicts
+     * least-played tracks first (see AdjustableLruEvictor).
+     */
     lateinit var streamingCache: SimpleCache
         private set
 
@@ -122,5 +128,10 @@ class MusicDriveApplication : Application() {
             Executors.newFixedThreadPool(3),
         )
         downloadTracker = DownloadTracker(this, downloadManager)
+        applicationScope.launch {
+            downloadTracker.downloads.collect { downloads ->
+                streamingEvictor.reservedBytes = downloads.values.sumOf { it.bytesDownloaded }
+            }
+        }
     }
 }
