@@ -1,10 +1,14 @@
 package com.ettore.musicdrive.ui
 
 import android.graphics.BitmapFactory
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -20,19 +24,22 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.Notes
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.Lyrics
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Repeat
+import androidx.compose.material.icons.filled.RepeatOn
+import androidx.compose.material.icons.filled.RepeatOne
+import androidx.compose.material.icons.filled.Shuffle
+import androidx.compose.material.icons.filled.ShuffleOn
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -45,10 +52,13 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
@@ -57,6 +67,7 @@ import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.session.MediaController
 import androidx.palette.graphics.Palette
+import coil3.compose.AsyncImage
 import kotlinx.coroutines.delay
 
 data class PlayerUiState(
@@ -70,6 +81,7 @@ data class PlayerUiState(
     /** The current track's embedded artwork, as Media3 already extracted it while decoding the stream. */
     val artworkData: ByteArray? = null,
     val repeatMode: Int = Player.REPEAT_MODE_OFF,
+    val shuffleModeEnabled: Boolean = false,
 ) {
     val hasTrack: Boolean get() = title.isNotEmpty() || artist.isNotEmpty() || isPlaying
 }
@@ -120,6 +132,7 @@ fun rememberPlayerUiState(controller: MediaController?): PlayerUiState {
                 durationMs = controller.duration.coerceAtLeast(0),
                 artworkData = metadata.artworkData,
                 repeatMode = controller.repeatMode,
+                shuffleModeEnabled = controller.shuffleModeEnabled,
             )
         }
         refresh()
@@ -129,6 +142,7 @@ fun rememberPlayerUiState(controller: MediaController?): PlayerUiState {
             override fun onIsPlayingChanged(isPlaying: Boolean) = refresh()
             override fun onPlaybackStateChanged(playbackState: Int) = refresh()
             override fun onRepeatModeChanged(repeatMode: Int) = refresh()
+            override fun onShuffleModeEnabledChanged(shuffleModeEnabled: Boolean) = refresh()
         }
         controller.addListener(listener)
         onDispose { controller.removeListener(listener) }
@@ -154,10 +168,34 @@ fun MiniPlayerBar(
     onPlayPauseClick: () -> Unit,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    // The current album's disk-cached cover (same art already resolved for the library grid),
+    // shown while state.artworkData is still catching up - see FullPlayerScreen's kdoc.
+    fallbackArt: Any? = null,
 ) {
     val artBitmap = rememberArtBitmap(state.artworkData)
+    // Accumulated vertical drag; a swipe up past the threshold expands the full
+    // player too, same as tapping - a lighter-weight stand-in for Auxio's
+    // follow-the-finger BottomSheetBehavior drag (not portable from its
+    // View-based implementation; this reuses the existing tap target instead
+    // of a real anchored drag-and-settle animation).
+    var dragUpTotal by remember { mutableStateOf(0f) }
 
-    Surface(modifier = modifier.fillMaxWidth().clickable(onClick = onClick), tonalElevation = 3.dp) {
+    Surface(
+        modifier = modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .pointerInput(onClick) {
+                detectVerticalDragGestures(
+                    onDragStart = { dragUpTotal = 0f },
+                    onDragEnd = { if (dragUpTotal <= -60f) onClick() },
+                    onDragCancel = { dragUpTotal = 0f },
+                ) { change, dragAmount ->
+                    change.consume()
+                    dragUpTotal += dragAmount
+                }
+            },
+        tonalElevation = 3.dp,
+    ) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -172,6 +210,13 @@ fun MiniPlayerBar(
                 if (artBitmap != null) {
                     Image(
                         bitmap = artBitmap,
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                } else if (fallbackArt != null) {
+                    AsyncImage(
+                        model = fallbackArt,
                         contentDescription = null,
                         contentScale = ContentScale.Crop,
                         modifier = Modifier.fillMaxSize(),
@@ -222,8 +267,14 @@ fun FullPlayerScreen(
     onCollapse: () -> Unit,
     onOpenQueue: () -> Unit,
     onOpenLyrics: () -> Unit,
+    onToggleShuffle: () -> Unit,
     onToggleRepeat: () -> Unit,
     modifier: Modifier = Modifier,
+    // The current album's disk-cached cover (AlbumArtRepository.resolveArt, the same art
+    // already resolved for the library grid). state.artworkData comes from Media3 extracting
+    // ID3 art out of the live stream, which lags a beat on every skip - the album's already-
+    // resolved cover fills that gap instead of the bare initial-letter placeholder flashing.
+    fallbackArt: Any? = null,
 ) {
     val artBitmap = rememberArtBitmap(state.artworkData)
     val dominantColor = rememberDominantColor(state.artworkData)
@@ -253,21 +304,18 @@ fun FullPlayerScreen(
             .statusBarsPadding()
             .padding(24.dp),
     ) {
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            IconButton(onClick = onCollapse) {
-                Icon(Icons.Filled.KeyboardArrowDown, contentDescription = "Collapse")
-            }
-            Row {
-                IconButton(onClick = onOpenLyrics) {
-                    Icon(Icons.AutoMirrored.Filled.Notes, contentDescription = "Lyrics")
-                }
-                IconButton(onClick = onOpenQueue) {
-                    Icon(Icons.AutoMirrored.Filled.QueueMusic, contentDescription = "Queue")
-                }
-            }
+        IconButton(onClick = onCollapse) {
+            Icon(Icons.Filled.KeyboardArrowDown, contentDescription = "Collapse")
         }
 
-        Spacer(Modifier.weight(1f))
+        // Art through controls is centered as ONE block (rather than split between two
+        // independent weight(1f) spacers) so a track with a 2-line title doesn't visibly
+        // squeeze/shift the whole layout relative to a 1-line one on every skip - found live,
+        // real jank, not a nitpick.
+        Column(
+            modifier = Modifier.weight(1f).fillMaxWidth(),
+            verticalArrangement = Arrangement.Center,
+        ) {
 
         Box(
             modifier = Modifier
@@ -297,6 +345,13 @@ fun FullPlayerScreen(
                     contentScale = ContentScale.Crop,
                     modifier = Modifier.fillMaxSize(),
                 )
+            } else if (fallbackArt != null) {
+                AsyncImage(
+                    model = fallbackArt,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize(),
+                )
             } else {
                 Text(
                     state.title.take(1).uppercase().ifBlank { "?" },
@@ -306,27 +361,23 @@ fun FullPlayerScreen(
             }
         }
 
-        Row(modifier = Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.Center) {
-            IconButton(onClick = onToggleRepeat) {
-                Icon(
-                    Icons.Filled.Repeat,
-                    contentDescription = if (state.repeatMode == Player.REPEAT_MODE_OFF) "Repeat album: off" else "Repeat album: on",
-                    tint = if (state.repeatMode == Player.REPEAT_MODE_OFF) {
-                        MaterialTheme.colorScheme.onSurfaceVariant
-                    } else {
-                        MaterialTheme.colorScheme.primary
-                    },
-                )
+        Row(modifier = Modifier.fillMaxWidth().padding(top = 4.dp), horizontalArrangement = Arrangement.Start) {
+            IconButton(onClick = onOpenLyrics) {
+                Icon(Icons.Filled.Lyrics, contentDescription = "Lyrics")
+            }
+            IconButton(onClick = onOpenQueue) {
+                Icon(Icons.AutoMirrored.Filled.QueueMusic, contentDescription = "Queue")
             }
         }
 
-        Spacer(Modifier.height(24.dp))
+        Spacer(Modifier.height(20.dp))
 
         Text(
             state.title.ifBlank { "Loading…" },
             style = MaterialTheme.typography.headlineSmall,
-            maxLines = 2,
+            maxLines = 1,
             overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.basicMarquee(),
         )
         if (state.artist.isNotBlank()) {
             Text(
@@ -338,10 +389,15 @@ fun FullPlayerScreen(
 
         Spacer(Modifier.height(24.dp))
 
-        Slider(
-            value = state.positionMs.toFloat(),
-            valueRange = 0f..(state.durationMs.takeIf { it > 0 }?.toFloat() ?: 1f),
-            onValueChange = { onSeek(it.toLong()) },
+        val progressFraction = if (state.durationMs > 0) {
+            (state.positionMs.toFloat() / state.durationMs).coerceIn(0f, 1f)
+        } else {
+            0f
+        }
+        SquigglySlider(
+            progressFraction = progressFraction,
+            onSeek = { fraction -> onSeek((fraction * state.durationMs).toLong()) },
+            modifier = Modifier.fillMaxWidth(),
         )
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Text(formatDuration(state.positionMs), style = MaterialTheme.typography.bodySmall)
@@ -352,13 +408,23 @@ fun FullPlayerScreen(
 
         Row(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.Center,
+            horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            IconButton(onClick = onToggleShuffle) {
+                Icon(
+                    if (state.shuffleModeEnabled) Icons.Filled.ShuffleOn else Icons.Filled.Shuffle,
+                    contentDescription = if (state.shuffleModeEnabled) "Shuffle: on" else "Shuffle: off",
+                    tint = if (state.shuffleModeEnabled) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                )
+            }
             IconButton(onClick = onPreviousClick) {
                 Icon(Icons.Filled.SkipPrevious, contentDescription = "Previous", modifier = Modifier.size(40.dp))
             }
-            Spacer(Modifier.width(24.dp))
             FilledIconButton(onClick = onPlayPauseClick, modifier = Modifier.size(64.dp)) {
                 Icon(
                     if (state.isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow,
@@ -366,15 +432,92 @@ fun FullPlayerScreen(
                     modifier = Modifier.size(32.dp),
                 )
             }
-            Spacer(Modifier.width(24.dp))
             IconButton(onClick = onNextClick) {
                 Icon(Icons.Filled.SkipNext, contentDescription = "Next", modifier = Modifier.size(40.dp))
             }
+            IconButton(onClick = onToggleRepeat) {
+                Icon(
+                    when (state.repeatMode) {
+                        Player.REPEAT_MODE_ONE -> Icons.Filled.RepeatOne
+                        Player.REPEAT_MODE_ALL -> Icons.Filled.RepeatOn
+                        else -> Icons.Filled.Repeat
+                    },
+                    contentDescription = when (state.repeatMode) {
+                        Player.REPEAT_MODE_ONE -> "Repeat: one track"
+                        Player.REPEAT_MODE_ALL -> "Repeat: all"
+                        else -> "Repeat: off"
+                    },
+                    tint = if (state.repeatMode == Player.REPEAT_MODE_OFF) {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    } else {
+                        MaterialTheme.colorScheme.primary
+                    },
+                )
+            }
         }
+        }
+    }
+    }
+    }
+}
 
-        Spacer(Modifier.weight(1f))
-    }
-    }
+/**
+ * A hand-drawn straight seek bar on a [Canvas] (rather than the stock
+ * [androidx.compose.material3.Slider], to match this screen's custom look
+ * and keep the drag/tap-to-seek gesture handling below self-contained).
+ */
+@Composable
+private fun SquigglySlider(
+    progressFraction: Float,
+    onSeek: (fraction: Float) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    // While the user is actively dragging, show their finger's position instead of
+    // the real (laggier) playback position; commit the seek only on release.
+    var dragFraction by remember { mutableStateOf<Float?>(null) }
+    val shownFraction = dragFraction ?: progressFraction
+
+    val primaryColor = MaterialTheme.colorScheme.primary
+    val trackColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.35f)
+
+    Canvas(
+        modifier = modifier
+            .height(32.dp)
+            .pointerInput(Unit) {
+                detectHorizontalDragGestures(
+                    onDragStart = { offset -> dragFraction = (offset.x / size.width).coerceIn(0f, 1f) },
+                    onDragEnd = { dragFraction?.let(onSeek); dragFraction = null },
+                    onDragCancel = { dragFraction = null },
+                ) { change, _ ->
+                    change.consume()
+                    dragFraction = (change.position.x / size.width).coerceIn(0f, 1f)
+                }
+            }
+            .pointerInput(Unit) {
+                detectTapGestures { offset -> onSeek((offset.x / size.width).coerceIn(0f, 1f)) }
+            },
+    ) {
+        val centerY = size.height / 2f
+        val progressX = size.width * shownFraction
+        val strokeWidth = 4.dp.toPx()
+
+        drawLine(
+            color = primaryColor,
+            start = Offset(0f, centerY),
+            end = Offset(progressX, centerY),
+            strokeWidth = strokeWidth,
+            cap = StrokeCap.Round,
+        )
+
+        drawLine(
+            color = trackColor,
+            start = Offset(progressX, centerY),
+            end = Offset(size.width, centerY),
+            strokeWidth = strokeWidth,
+            cap = StrokeCap.Round,
+        )
+
+        drawCircle(color = primaryColor, radius = 6.dp.toPx(), center = Offset(progressX, centerY))
     }
 }
 

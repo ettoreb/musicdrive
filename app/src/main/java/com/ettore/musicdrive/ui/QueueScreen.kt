@@ -2,6 +2,7 @@ package com.ettore.musicdrive.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -68,6 +69,7 @@ fun rememberQueueState(controller: MediaController?): QueueState {
 @Composable
 fun QueueScreen(
     state: QueueState,
+    isPlaying: Boolean,
     onTrackClick: (index: Int) -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
@@ -90,16 +92,21 @@ fun QueueScreen(
                             .padding(horizontal = 16.dp, vertical = 14.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Text(
-                            "${index + 1}",
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = if (isCurrent) {
-                                MaterialTheme.colorScheme.onPrimaryContainer
+                        Box(modifier = Modifier.width(32.dp), contentAlignment = Alignment.CenterStart) {
+                            if (isCurrent && isPlaying) {
+                                PlayingIndicator(color = MaterialTheme.colorScheme.onPrimaryContainer)
                             } else {
-                                MaterialTheme.colorScheme.onSurfaceVariant
-                            },
-                            modifier = Modifier.width(32.dp),
-                        )
+                                Text(
+                                    "${index + 1}",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = if (isCurrent) {
+                                        MaterialTheme.colorScheme.onPrimaryContainer
+                                    } else {
+                                        MaterialTheme.colorScheme.onSurfaceVariant
+                                    },
+                                )
+                            }
+                        }
                         Column {
                             Text(
                                 item.title.ifBlank { item.mediaId },

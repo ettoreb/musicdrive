@@ -82,6 +82,7 @@ import com.ettore.musicdrive.ui.QueueScreen
 import com.ettore.musicdrive.ui.ScreenHeader
 import com.ettore.musicdrive.ui.SearchScreen
 import com.ettore.musicdrive.ui.SettingsScreen
+import com.ettore.musicdrive.ui.StatsScreen
 import com.ettore.musicdrive.ui.TopArtistItem
 import com.ettore.musicdrive.ui.UNKNOWN_ARTIST
 import com.ettore.musicdrive.ui.groupByArtist
@@ -244,6 +245,7 @@ private fun MusicDriveApp(
     var isPlayerExpanded by remember { mutableStateOf(false) }
     var isQueueVisible by remember { mutableStateOf(false) }
     var isLyricsVisible by remember { mutableStateOf(false) }
+    var isStatsVisible by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
     fun selectBottomTab(tab: BottomTab) {
@@ -342,6 +344,17 @@ private fun MusicDriveApp(
         }.toMap()
     }
 
+    // Fills the player's cover-art gap on skip: Player.mediaMetadata.artworkData comes from
+    // Media3 re-extracting ID3 art out of the new track's stream, which lags a beat behind the
+    // transition itself (the placeholder briefly flashes). AlbumArtRepository already resolved
+    // and disk/memory-cached this album's art for the library grid, so reusing it here is
+    // effectively instant instead of waiting on the live stream.
+    val currentPlayingAlbum = trackLocations[playerUiState.mediaId]?.first
+    var currentTrackFallbackArt by remember { mutableStateOf<Any?>(null) }
+    LaunchedEffect(currentPlayingAlbum?.id) {
+        currentTrackFallbackArt = currentPlayingAlbum?.let { albumArtRepository.resolveArt(it) }
+    }
+
     // Release years aren't known up front (they're resolved lazily, tag-first-then-iTunes,
     // same as art) but sorting by year needs them for the whole visible list at once, so this
     // eagerly resolves every loaded album's year in the background as soon as the library loads.
@@ -364,6 +377,37 @@ private fun MusicDriveApp(
         }
     }
     val yearOf: (DriveAlbum) -> Int? = { albumYears[it.id] }
+
+    // Hoisted out of the Home route so the Stats screen can reuse the same computed
+    // lists without a separate route-scoped duplicate.
+    val homeItems = remember(topTrackCounts, trackLocations) {
+        topTrackCounts.mapNotNull { playCount ->
+            trackLocations[playCount.trackId]?.let { (album, track, index) ->
+                HomeGridItem(album, track, index, playCount.playCount)
+            }
+        }
+    }
+    val likedSongsAlbum = remember(homeItems) {
+        if (homeItems.isEmpty()) {
+            null
+        } else {
+            DriveAlbum(id = "liked-songs", name = "Liked Songs", artistHint = null, tracks = homeItems.map { it.track })
+        }
+    }
+    val artistSummaries = remember(loadedAlbums) {
+        loadedAlbums.groupByArtist().associateBy { it.name }
+    }
+    val topArtists = remember(allPlayCounts, trackLocations, artistSummaries) {
+        val totals = mutableMapOf<String, Int>()
+        allPlayCounts.forEach { playCount ->
+            val album = trackLocations[playCount.trackId]?.first ?: return@forEach
+            val artistName = album.artistHint ?: UNKNOWN_ARTIST
+            totals[artistName] = (totals[artistName] ?: 0) + playCount.playCount
+        }
+        totals.entries.sortedByDescending { it.value }.take(6).mapNotNull { (name, total) ->
+            artistSummaries[name]?.let { TopArtistItem(it, total) }
+        }
+    }
 
     // Counts a "play" on every track transition (manual skip, auto-advance, or the
     // initial track of a newly built playlist all count) - simple and good enough
@@ -452,39 +496,6 @@ private fun MusicDriveApp(
 
                         is AppState.LibraryLoaded -> when (val route = libraryRoute) {
                             is LibraryRoute.Home -> Column(modifier = Modifier.fillMaxSize()) {
-                                val homeItems = remember(topTrackCounts, trackLocations) {
-                                    topTrackCounts.mapNotNull { playCount ->
-                                        trackLocations[playCount.trackId]?.let { (album, track, index) ->
-                                            HomeGridItem(album, track, index, playCount.playCount)
-                                        }
-                                    }
-                                }
-                                val likedSongsAlbum = remember(homeItems) {
-                                    if (homeItems.isEmpty()) {
-                                        null
-                                    } else {
-                                        DriveAlbum(
-                                            id = "liked-songs",
-                                            name = "Liked Songs",
-                                            artistHint = null,
-                                            tracks = homeItems.map { it.track },
-                                        )
-                                    }
-                                }
-                                val artistSummaries = remember(current.albums) {
-                                    current.albums.groupByArtist().associateBy { it.name }
-                                }
-                                val topArtists = remember(allPlayCounts, trackLocations, artistSummaries) {
-                                    val totals = mutableMapOf<String, Int>()
-                                    allPlayCounts.forEach { playCount ->
-                                        val album = trackLocations[playCount.trackId]?.first ?: return@forEach
-                                        val artistName = album.artistHint ?: UNKNOWN_ARTIST
-                                        totals[artistName] = (totals[artistName] ?: 0) + playCount.playCount
-                                    }
-                                    totals.entries.sortedByDescending { it.value }.take(6).mapNotNull { (name, total) ->
-                                        artistSummaries[name]?.let { TopArtistItem(it, total) }
-                                    }
-                                }
                                 HomeScreen(
                                     topTracks = homeItems,
                                     topArtists = topArtists,
@@ -576,6 +587,7 @@ private fun MusicDriveApp(
                                 onThemeModeChange = { mode -> scope.launch { settingsRepository.setThemeMode(mode) } },
                                 defaultAlbumSortMode = albumSortMode,
                                 onDefaultAlbumSortModeChange = { mode -> scope.launch { settingsRepository.setAlbumSortMode(mode) } },
+                                onOpenStats = { isStatsVisible = true },
                                 onBack = { libraryRoute = LibraryRoute.Home },
                                 modifier = Modifier.fillMaxSize(),
                             )
@@ -598,6 +610,8 @@ private fun MusicDriveApp(
                                 album = route.album,
                                 downloads = downloads,
                                 resolveArt = albumArtRepository::resolveArt,
+                                currentlyPlayingTrackId = playerUiState.mediaId.ifBlank { null },
+                                isPlaying = playerUiState.isPlaying,
                                 onBack = { libraryRoute = route.backTo },
                                 onTrackClick = { index ->
                                     onPlayAlbum(route.album, index)
@@ -617,6 +631,7 @@ private fun MusicDriveApp(
                             if (playerUiState.isPlaying) mediaController?.pause() else mediaController?.play()
                         },
                         onClick = { isPlayerExpanded = true },
+                        fallbackArt = currentTrackFallbackArt,
                     )
                 }
             }
@@ -635,15 +650,21 @@ private fun MusicDriveApp(
                 onCollapse = { isPlayerExpanded = false },
                 onOpenQueue = { isQueueVisible = true },
                 onOpenLyrics = { isLyricsVisible = true },
+                onToggleShuffle = {
+                    mediaController?.let { controller ->
+                        controller.shuffleModeEnabled = !controller.shuffleModeEnabled
+                    }
+                },
                 onToggleRepeat = {
                     mediaController?.let { controller ->
-                        controller.repeatMode = if (controller.repeatMode == Player.REPEAT_MODE_OFF) {
-                            Player.REPEAT_MODE_ALL
-                        } else {
-                            Player.REPEAT_MODE_OFF
+                        controller.repeatMode = when (controller.repeatMode) {
+                            Player.REPEAT_MODE_OFF -> Player.REPEAT_MODE_ALL
+                            Player.REPEAT_MODE_ALL -> Player.REPEAT_MODE_ONE
+                            else -> Player.REPEAT_MODE_OFF
                         }
                     }
                 },
+                fallbackArt = currentTrackFallbackArt,
             )
         }
 
@@ -651,6 +672,7 @@ private fun MusicDriveApp(
             BackHandler { isQueueVisible = false }
             QueueScreen(
                 state = queueState,
+                isPlaying = playerUiState.isPlaying,
                 onTrackClick = { index ->
                     mediaController?.seekTo(index, 0L)
                     isQueueVisible = false
@@ -669,6 +691,16 @@ private fun MusicDriveApp(
             )
         }
 
+        if (isStatsVisible) {
+            BackHandler { isStatsVisible = false }
+            StatsScreen(
+                topTracks = homeItems,
+                topArtists = topArtists,
+                onBack = { isStatsVisible = false },
+                resolveArt = albumArtRepository::resolveArt,
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
     }
 }
 

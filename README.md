@@ -29,9 +29,10 @@ lyrics, and permanent per-album downloads. Android Auto is still to come.
 | Automatic album covers (embedded art + iTunes fallback, cached offline) | ✅ Working |
 | Dynamic per-track player color from the album art | ✅ Working |
 | Playback (Media3/ExoPlayer, background, notification) | ✅ Working |
-| Mini-player + full-screen player (expand/collapse, seek, skip, swipe, repeat) | ✅ Working |
+| Mini-player + full-screen player (expand/collapse, seek, skip, swipe, shuffle/repeat) | ✅ Working |
 | Queue view (see and jump to any upcoming/previous track) | ✅ Working |
-| Streaming cache (user-configurable size, LRU eviction) | ✅ Working |
+| "Your Stats" recap (top song/artist, ranked top-5 lists) | ✅ Working |
+| Streaming cache (user-configurable size, least-played-first eviction) | ✅ Working |
 | Permanent offline downloads (per-album) | ✅ Working |
 | Room-cached library index (instant browse on relaunch) | ✅ Working |
 | Synced lyrics with karaoke-style word highlighting + LRCLIB fallback | ✅ Working |
@@ -45,8 +46,8 @@ lyrics, and permanent per-album downloads. Android Auto is still to come.
   — so both `root/Album` and `root/Artist/Album` layouts work. Cached in
   Room so relaunching browses instantly, refreshing quietly in the background.
 - **Playback**: Media3/ExoPlayer with two separate caches — an
-  auto-managed streaming cache with a user-configurable size cap (LRU
-  eviction), and a separate permanent cache for explicit downloads that are
+  auto-managed streaming cache with a user-configurable size cap
+  (least-played-first eviction), and a separate permanent cache for explicit downloads that are
   never evicted. Tuned for fast tap-to-audio start, gapless transitions
   between an album's tracks, and survives the OS killing and restarting the
   app process mid-playback.

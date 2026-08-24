@@ -58,7 +58,7 @@ class MusicDriveApplication : Application() {
     lateinit var database: MusicDriveDatabase
         private set
 
-    /** Auto-managed, evictable cache for streamed playback. Bounded by a user-configurable size cap. */
+    /** Auto-managed, evictable cache for streamed playback. Bounded by a user-configurable size cap; evicts least-played tracks first (see AdjustableLruEvictor). */
     lateinit var streamingCache: SimpleCache
         private set
 
@@ -100,6 +100,11 @@ class MusicDriveApplication : Application() {
         applicationScope.launch {
             settingsRepository.cacheLimitBytes.collect { limitBytes ->
                 streamingEvictor.maxBytes = limitBytes
+            }
+        }
+        applicationScope.launch {
+            database.playCountDao().observeAll().collect { counts ->
+                streamingEvictor.playCounts = counts.associate { it.trackId to it.playCount }
             }
         }
 

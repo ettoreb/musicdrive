@@ -728,14 +728,99 @@ individual commits):
   independently but files aren't copyable without triggering copyleft.
   Metrolist is the standout reference (see Reference section below).
 
+Player polish batch (a "now playing" equalizer marker, a Stats screen, and a
+round of user-reported full-player fixes) implemented:
+- `ui/PlayingIndicator.kt`: the 3-bar equalizer marker flagged in Reference
+  below is now built and wired in — `AlbumDetailScreen`'s and `QueueScreen`'s
+  track-number column shows it (in place of the number) for whichever row is
+  the currently-playing AND currently-playing(isPlaying) track.
+- `ui/StatsScreen.kt`: the "Wrapped"-style recap flagged in Reference below
+  is now built — a single scrollable page (hero cards for #1 song/artist,
+  ranked top-5 lists for both), reusing the exact same `homeItems`/
+  `topArtists` lists `MainActivity` already computes for the Home route
+  (hoisted out so both routes share one computation) rather than a second
+  query. Opened from a new "Stats" row in Settings.
+- Real bug found and fixed live (physical Pixel, user-reported): the full
+  player's artwork came ONLY from `controller.mediaMetadata.artworkData` —
+  Media3 re-extracting ID3 art from the new track's stream on every skip,
+  which lags a beat behind the transition itself, flashing the bare
+  placeholder tile. `FullPlayerScreen`/`MiniPlayerBar` now take a
+  `fallbackArt` param — `MainActivity` resolves it via the EXISTING
+  `AlbumArtRepository.resolveArt()` (already memory/disk-cached from the
+  library grid) keyed off `trackLocations[playerUiState.mediaId]?.first`,
+  so skipping within an album now shows the right cover instantly instead
+  of blanking. This is a live-metadata-vs-cache timing fix, not a caching
+  gap — the art was already being cached correctly, the player screen just
+  wasn't reusing it.
+- Real bug found and fixed live (same session): the full player's content
+  visibly reflowed/"shrank" on every skip, because the layout split
+  flexible space between TWO independent `weight(1f)` spacers (one above
+  the art, one below the controls) — a track whose title wrapped to 2 lines
+  vs. 1 line shifted that split asymmetrically. Fixed by wrapping
+  art-through-controls in a SINGLE `weight(1f)` `Column` with
+  `Arrangement.Center` instead, and by capping the title to `maxLines = 1`
+  with `Modifier.basicMarquee()` (scrolls instead of wrapping) so title
+  height stopped varying in the first place.
+- User-requested control changes to `FullPlayerScreen`: shuffle toggle and
+  a 3-state repeat button (off → all → one, single cycling icon —
+  `Icons.Filled.Repeat`/`RepeatOn`/`RepeatOne`) now flank the
+  previous/play/next row, YouTube-Music-style (`PlayerUiState` gained
+  `shuffleModeEnabled`, mirrored from `controller.shuffleModeEnabled` the
+  same way `repeatMode` already was). The lyrics button moved from the top
+  bar to its own row directly below the album art, alongside the queue
+  button (both left-aligned) — icon changed from the generic
+  `Icons.AutoMirrored.Filled.Notes` to `Icons.Filled.Lyrics` (more
+  recognizable). The hand-drawn wavy `SquigglySlider` seek bar reverted to
+  a plain straight line (user didn't like the wave) — same Canvas/drag/tap
+  gesture handling, just a `drawLine` instead of a sine-wave `Path`; the
+  wave-animation code (`rememberInfiniteTransition`, phase, amplitude/
+  wavelength) was removed entirely rather than left dead.
+- `ui/AlbumDetailScreen.kt`'s "Download album" button changed from a
+  labeled `Button` to an icon-only `FilledIconButton` per request (kept the
+  three-state Download/spinner/DownloadDone icon logic, dropped the text).
+- Cache eviction policy changed from pure Media3 LRU (evicts by
+  least-recently-touched byte span) to **least-played-first**:
+  `playback/AdjustableLruEvictor.kt` now takes a live `trackId -> playCount`
+  map (fed from the SAME `PlayCountDao.observeAll()` Home already uses,
+  collected in `MusicDriveApplication.onCreate()` next to the existing
+  `cacheLimitBytes` feed) and sorts eviction candidates by ascending play
+  count first, `lastTouchTimestamp` as a tiebreaker — a track streamed once
+  last week no longer outlives one streamed 50 times, which is what a
+  most-played-driven personal cache should do. A missing/never-played track
+  counts as play count 0 (evicted first). Added one safety net beyond what
+  was asked: the actively-streaming span is protected from eviction where
+  another candidate exists, since play-count alone has no notion of "this
+  is what's playing right now" and could otherwise evict its own in-flight
+  buffer for a rarely-played track. Verified: compiles, installs, plays,
+  and the evictor's onStartFile/onSpanAdded path is exercised live (buffered
+  position advancing normally) with no crash — a true fill-past-the-cap
+  test wasn't practically forceable in-session (would need either a tiny
+  cache cap or a lot of large files).
+- Verified live end to end on the `musicdrive_test` emulator (the physical
+  Pixel 7 dropped off USB mid-session and wasn't available for the second
+  half of this batch — playing indicator/Stats/art-lag-fix were confirmed
+  on the Pixel first, the rest of the batch only on the emulator so far):
+  playing-indicator bars replace the track number on the active row in both
+  Album Detail and Queue; Stats opens from Settings and shows correct
+  ranked data; skipping within an album shows the right cover art
+  instantly; the layout no longer visibly shifts between a 1-line and
+  2-line title (title now scrolls via marquee instead of wrapping); the
+  seek bar is a straight line; shuffle toggles and repeat correctly cycles
+  off → all → one → off (confirmed via `dumpsys media_session` /
+  `uiautomator dump`, not just visually); lyrics+queue icons sit together
+  below the cover.
+
 ## Next steps
 1. Android Auto: MediaLibraryService browsing tree + automotive app
    descriptor
-2. Not yet re-verified after the UI/UX overhaul: the physical Pixel 7 is
-   still on an older build (everything from bottom-nav onward — dynamic
-   color, hardened art caching, Search, synced lyrics — was only verified
-   on the emulator). Install the latest build there too before considering
-   this batch fully done.
+2. Not yet re-verified on the physical Pixel 7: the second half of the
+   "Player polish batch" above (shuffle/repeat, lyrics/queue repositioning,
+   straight seek bar, least-played-first cache eviction) was only verified
+   on the `musicdrive_test` emulator — the Pixel dropped off USB mid-session.
+   Install the latest build there too before considering that batch fully
+   done. (Everything from bottom-nav through the earlier UI/UX overhaul was
+   already re-verified on the emulator per the entry above it; this item is
+   now specifically about the polish batch, not the whole app.)
 
 ## Reference
 - androidx/media demo apps are the canonical reference for DownloadManager
@@ -763,14 +848,13 @@ individual commits):
   standout — actively maintained, Compose+Media3, most feature-rich found.
   Confirmed the word-highlight-from-line-sync synthesis trick already
   implemented here. Other things worth revisiting later, NOT yet built:
-  - `SquigglySlider.kt`: hand-drawn wavy `Canvas` seek progress (sine wave
-    that flattens near the thumb), not the stock `Slider` composable.
-  - `PlayingIndicator.kt`: 3-bar "now playing" equalizer icon, each bar
-    independently looping `Animatable.animateTo(Random.nextFloat())` —
-    would fit as a "currently playing" marker on Home/album-detail rows.
-  - A separate "Wrapped"-style annual stats screen, distinct from the
-    always-on Home most-played view, consuming the same
-    `PlayCountEntity`/`lastPlayedAt` data already tracked here.
+  - ~~`SquigglySlider.kt`: hand-drawn wavy `Canvas` seek progress~~ — built,
+    then reverted to a straight line per user preference (see "Player
+    polish batch" above); the drag/tap-to-seek `Canvas` approach stayed.
+  - ~~`PlayingIndicator.kt`: 3-bar "now playing" equalizer icon~~ — built,
+    see "Player polish batch" above.
+  - ~~A separate "Wrapped"-style annual stats screen~~ — built as
+    `ui/StatsScreen.kt`, see "Player polish batch" above.
   - Auxio (4.2k★, GPL-3.0, View-based not Compose) drives its mini↔full
     player expand/collapse via a `BottomSheetBehavior` subclass with
     velocity-based fling — reference for a possible `AnchoredDraggable`

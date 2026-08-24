@@ -16,10 +16,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.DownloadDone
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -46,6 +46,8 @@ fun AlbumDetailScreen(
     album: DriveAlbum,
     downloads: Map<String, Download>,
     resolveArt: suspend (DriveAlbum) -> Any?,
+    currentlyPlayingTrackId: String?,
+    isPlaying: Boolean,
     onBack: () -> Unit,
     onTrackClick: (index: Int) -> Unit,
     onDownloadAlbum: () -> Unit,
@@ -115,15 +117,26 @@ fun AlbumDetailScreen(
                         .padding(horizontal = 24.dp, vertical = 14.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                    Text(
-                        "${index + 1}",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.width(32.dp),
-                    )
+                    val isCurrentTrack = track.id == currentlyPlayingTrackId
+                    Box(modifier = Modifier.width(32.dp), contentAlignment = Alignment.CenterStart) {
+                        if (isCurrentTrack && isPlaying) {
+                            PlayingIndicator(color = MaterialTheme.colorScheme.primary)
+                        } else {
+                            Text(
+                                "${index + 1}",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = if (isCurrentTrack) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                },
+                            )
+                        }
+                    }
                     Text(
                         track.name.withoutAudioExtension(),
                         style = MaterialTheme.typography.bodyLarge,
+                        color = if (isCurrentTrack) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f),
@@ -142,24 +155,25 @@ private fun AlbumDownloadButton(
     modifier: Modifier = Modifier,
 ) {
     when (state) {
-        AlbumDownloadState.NONE, AlbumDownloadState.PARTIAL -> Button(onClick = onDownload, modifier = modifier) {
-            Icon(Icons.Filled.Download, contentDescription = null, modifier = Modifier.padding(end = 8.dp))
-            Text("Download album")
+        AlbumDownloadState.NONE, AlbumDownloadState.PARTIAL -> FilledIconButton(onClick = onDownload, modifier = modifier) {
+            Icon(Icons.Filled.Download, contentDescription = "Download album")
         }
-        AlbumDownloadState.DOWNLOADING -> Button(onClick = onRemove, modifier = modifier) {
-            CircularProgressIndicator(modifier = Modifier.width(16.dp).padding(end = 8.dp), strokeWidth = 2.dp)
-            Text("Downloading… tap to cancel")
+        AlbumDownloadState.DOWNLOADING -> FilledIconButton(onClick = onRemove, modifier = modifier) {
+            CircularProgressIndicator(
+                modifier = Modifier.width(20.dp),
+                strokeWidth = 2.dp,
+                color = MaterialTheme.colorScheme.onPrimary,
+            )
         }
-        AlbumDownloadState.COMPLETE -> Button(
+        AlbumDownloadState.COMPLETE -> FilledIconButton(
             onClick = onRemove,
             modifier = modifier,
-            colors = ButtonDefaults.buttonColors(
+            colors = IconButtonDefaults.filledIconButtonColors(
                 containerColor = MaterialTheme.colorScheme.surfaceVariant,
                 contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
             ),
         ) {
-            Icon(Icons.Filled.DownloadDone, contentDescription = null, modifier = Modifier.padding(end = 8.dp))
-            Text("Downloaded · tap to remove")
+            Icon(Icons.Filled.DownloadDone, contentDescription = "Downloaded · tap to remove")
         }
     }
 }

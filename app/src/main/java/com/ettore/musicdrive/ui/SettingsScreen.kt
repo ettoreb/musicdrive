@@ -4,10 +4,14 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Slider
@@ -58,6 +62,7 @@ fun SettingsScreen(
     onThemeModeChange: (ThemeMode) -> Unit,
     defaultAlbumSortMode: AlbumSortMode,
     onDefaultAlbumSortModeChange: (AlbumSortMode) -> Unit,
+    onOpenStats: () -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -71,7 +76,12 @@ fun SettingsScreen(
         Column {
             ScreenHeader(title = "Settings", onBack = onBack)
 
-            Column(modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 16.dp),
+            ) {
                 SettingsSectionTitle("Library")
                 SettingsActionRow(label = libraryFolderLabel, onClick = onChangeFolder)
 
@@ -100,6 +110,11 @@ fun SettingsScreen(
                         onClick = { onDefaultAlbumSortModeChange(mode) },
                     )
                 }
+
+                SettingsSectionTitle("Stats")
+                SettingsActionRow(label = "Your Stats (most-played songs & artists)", onClick = onOpenStats)
+
+                Spacer(Modifier.height(24.dp))
             }
         }
     }
