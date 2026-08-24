@@ -1,43 +1,52 @@
-# musicdrive
+# MusicDrive
 
-An Android music player that streams your library straight from Google
-Drive — functionally similar to YouTube Music, not a visual clone. Personal
-project, sideloaded (not published to the Play Store).
+**Stream your own music library straight from Google Drive — a
+personal, YouTube-Music-style player for Android.**
 
-## Status
+No re-uploading to a streaming service, no re-encoding, no monthly fee:
+point MusicDrive at a Drive folder full of audio files and it turns that
+folder into a full-featured music app — background playback, offline
+downloads, synced lyrics, and a Material 3 UI, all built around whatever
+folder structure your library already uses.
 
-🚧 Early development, but the core loop works: sign in, pick your Drive
-music folder, and browse a YouTube-Music-style Home / Search / Library /
-Settings bottom-nav — a Home dashboard of your most-played songs and
-artists plus a "Liked Songs" playlist, full-text search across your
-library, an album grid with real cover art (dynamically tinting the player
-per track), and play — with background playback, a streaming cache, a
-mini/full player with swipe-to-skip, a queue view, synced karaoke-style
-lyrics, and permanent per-album downloads. Android Auto is still to come.
+> Personal project, sideloaded — not published to the Play Store.
 
-| Feature | Status |
-|---|---|
-| Google sign-in (Credential Manager, remembered across launches) | ✅ Working |
-| Drive authorization (`drive.readonly`) | ✅ Working |
-| Music folder picker (choose Drive library root, from Settings) | ✅ Working |
-| Bottom navigation: Home / Search / Library / Settings | ✅ Working |
-| Home dashboard (most-played songs + artists, Liked Songs playlist) | ✅ Working |
-| Search (albums, artists, songs) | ✅ Working |
-| Artist grid → album grid → album detail (Material 3, YouTube-Music-style) | ✅ Working |
-| Multi-disc releases merged into one album | ✅ Working |
-| Album sort by release year (default), name, or track count | ✅ Working |
-| Automatic album covers (embedded art + iTunes fallback, cached offline) | ✅ Working |
-| Dynamic per-track player color from the album art | ✅ Working |
-| Playback (Media3/ExoPlayer, background, notification) | ✅ Working |
-| Mini-player + full-screen player (expand/collapse, seek, skip, swipe, shuffle/repeat) | ✅ Working |
-| Queue view (see and jump to any upcoming/previous track) | ✅ Working |
-| "Your Stats" recap (top song/artist, ranked top-5 lists) | ✅ Working |
-| Streaming cache (user-configurable size, least-played-first eviction) | ✅ Working |
-| Permanent offline downloads (per-album) | ✅ Working |
-| Room-cached library index (instant browse on relaunch) | ✅ Working |
-| Synced lyrics with karaoke-style word highlighting + LRCLIB fallback | ✅ Working |
-| Settings (cache size, light/dark/system theme, default sort) | ✅ Working |
-| Android Auto | ⏳ Planned |
+<p align="center">
+  <img src="screenshots/home.png" width="200" alt="Home dashboard" />
+  <img src="screenshots/library.png" width="200" alt="Album library" />
+  <img src="screenshots/album-detail.png" width="200" alt="Album detail" />
+  <img src="screenshots/player.png" width="200" alt="Full-screen player" />
+  <img src="screenshots/stats.png" width="200" alt="Your Stats" />
+</p>
+
+## Features
+
+- **Your library, your structure** — point it at any Drive folder and it
+  finds albums recursively, however your files are organized
+  (`Album/`, `Artist/Album/`, multi-disc releases merged automatically).
+- **Home dashboard** — your most-played songs and artists, plus an
+  auto-generated "Liked Songs" playlist, so the app opens on what you
+  actually listen to.
+- **Full-text search** across albums, artists, and songs.
+- **Real cover art**, resolved from embedded tags first and an online
+  fallback second, cached locally so it's instant after the first look.
+- **Mini-player and full-screen player** — expand/collapse, swipe to
+  skip, shuffle, 3-state repeat (off/all/one), a dominant-color glow
+  pulled live from the current track's artwork.
+- **Queue view** — see and jump to any upcoming or previous track.
+- **Synced, karaoke-style lyrics** — embedded ID3 tags first, [LRCLIB](https://lrclib.net)
+  fallback, word-by-word highlighting as the track plays.
+- **"Your Stats"** — a Wrapped-style recap of your top songs and artists.
+- **Two independent caches**: a streaming cache with a user-configurable
+  size limit that evicts your least-played tracks first, and a completely
+  separate set of permanent, explicit per-album downloads that are never
+  touched by eviction.
+- **Survives everything** — background playback with a media notification,
+  gapless transitions between an album's tracks, and correct recovery even
+  if Android kills the app process mid-song.
+- Material 3 UI throughout, light/dark/system theme.
+
+**Roadmap:** Android Auto support is next.
 
 ## How it works
 
@@ -47,10 +56,10 @@ lyrics, and permanent per-album downloads. Android Auto is still to come.
   Room so relaunching browses instantly, refreshing quietly in the background.
 - **Playback**: Media3/ExoPlayer with two separate caches — an
   auto-managed streaming cache with a user-configurable size cap
-  (least-played-first eviction), and a separate permanent cache for explicit downloads that are
-  never evicted. Tuned for fast tap-to-audio start, gapless transitions
-  between an album's tracks, and survives the OS killing and restarting the
-  app process mid-playback.
+  (least-played-first eviction), and a separate permanent cache for
+  explicit downloads that are never evicted. Tuned for fast tap-to-audio
+  start, gapless transitions between an album's tracks, and survives the
+  OS killing and restarting the app process mid-playback.
 - **Auth**: Credential Manager for sign-in, the Identity API's
   `AuthorizationClient` for the separate Drive `drive.readonly` scope
   consent.
@@ -60,8 +69,8 @@ lyrics, and permanent per-album downloads. Android Auto is still to come.
   LRCLIB doesn't provide true per-word timing), falling back to plain
   static text when nothing's synced.
 
-See [CLAUDE.md](CLAUDE.md) for the full architecture notes, environment
-setup, and the detailed roadmap this table summarizes.
+For full architecture notes, environment setup, and the detailed
+development log, see [CLAUDE.md](CLAUDE.md).
 
 ## Building
 
