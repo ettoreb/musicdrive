@@ -85,12 +85,6 @@ fun HomeScreen(
             LikedSongsCard(count = likedSongsCount, onClick = onLikedSongsClick)
         }
 
-        if (topArtists.isNotEmpty()) {
-            item(span = { GridItemSpan(maxLineSpan) }) {
-                TopArtistsRow(artists = topArtists, onArtistClick = onArtistClick, resolveArtistArt = resolveArtistArt)
-            }
-        }
-
         item(span = { GridItemSpan(maxLineSpan) }) {
             Text(
                 "Most played",
@@ -101,6 +95,12 @@ fun HomeScreen(
 
         items(topTracks, key = { it.track.id }) { item ->
             HomeGridTile(item = item, onClick = { onTrackClick(item) }, resolveArt = resolveArt)
+        }
+
+        if (topArtists.isNotEmpty()) {
+            item(span = { GridItemSpan(maxLineSpan) }) {
+                TopArtistsRow(artists = topArtists, onArtistClick = onArtistClick, resolveArtistArt = resolveArtistArt)
+            }
         }
     }
 }

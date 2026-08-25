@@ -25,6 +25,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.QueueMusic
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.material.icons.filled.Lyrics
 import androidx.compose.material.icons.filled.Pause
@@ -36,12 +37,14 @@ import androidx.compose.material.icons.filled.Shuffle
 import androidx.compose.material.icons.filled.ShuffleOn
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -64,8 +67,12 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.media3.common.C
 import androidx.media3.common.MediaMetadata
+import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
+import androidx.media3.common.Tracks
+import androidx.media3.common.util.UnstableApi
 import androidx.media3.session.MediaController
 import androidx.palette.graphics.Palette
 import coil3.compose.AsyncImage
@@ -83,6 +90,16 @@ data class PlayerUiState(
     val artworkData: ByteArray? = null,
     val repeatMode: Int = Player.REPEAT_MODE_OFF,
     val shuffleModeEnabled: Boolean = false,
+    // "Stats for nerds" diagnostics - mirrored the same way as everything else above.
+    val audioCodec: String? = null,
+    val audioBitrateBps: Int = 0,
+    val audioSampleRateHz: Int = 0,
+    val audioChannelCount: Int = 0,
+    val bufferedPositionMs: Long = 0L,
+    val totalBufferedDurationMs: Long = 0L,
+    val playbackState: Int = Player.STATE_IDLE,
+    val playbackSpeed: Float = 1f,
+    val volume: Float = 1f,
 ) {
     val hasTrack: Boolean get() = title.isNotEmpty() || artist.isNotEmpty() || isPlaying
 }
@@ -114,6 +131,7 @@ private fun rememberDominantColor(artworkData: ByteArray?): Color? = remember(ar
 }
 
 /** Mirrors a Media3 MediaController's playback state into Compose state, live. */
+@UnstableApi
 @Composable
 fun rememberPlayerUiState(controller: MediaController?): PlayerUiState {
     var state by remember { mutableStateOf(PlayerUiState()) }
@@ -123,6 +141,12 @@ fun rememberPlayerUiState(controller: MediaController?): PlayerUiState {
 
         fun refresh() {
             val metadata = controller.mediaMetadata
+            // The selected audio track's Format (bitrate/codec/sample rate) for the stats-for-nerds
+            // panel - Player has no direct getAudioFormat() on MediaController, so it's pulled out
+            // of currentTracks instead (confirmed via javap against media3-common, not assumed).
+            val audioFormat = controller.currentTracks.groups
+                .firstOrNull { it.type == C.TRACK_TYPE_AUDIO && it.isSelected }
+                ?.let { group -> (0 until group.length).firstOrNull(group::isTrackSelected)?.let(group::getTrackFormat) }
             state = PlayerUiState(
                 mediaId = controller.currentMediaItem?.mediaId.orEmpty(),
                 title = metadata.title?.toString().orEmpty(),
@@ -134,6 +158,17 @@ fun rememberPlayerUiState(controller: MediaController?): PlayerUiState {
                 artworkData = metadata.artworkData,
                 repeatMode = controller.repeatMode,
                 shuffleModeEnabled = controller.shuffleModeEnabled,
+                audioCodec = audioFormat?.codecs ?: audioFormat?.sampleMimeType?.removePrefix("audio/")?.uppercase(),
+                // Format's fields are all @UnstableApi (see this function's own annotation); NO_VALUE
+                // is -1 for every one of these, so a plain > 0 check covers "unset" either way.
+                audioBitrateBps = audioFormat?.bitrate?.takeIf { it > 0 } ?: 0,
+                audioSampleRateHz = audioFormat?.sampleRate?.takeIf { it > 0 } ?: 0,
+                audioChannelCount = audioFormat?.channelCount?.takeIf { it > 0 } ?: 0,
+                bufferedPositionMs = controller.bufferedPosition.coerceAtLeast(0),
+                totalBufferedDurationMs = controller.totalBufferedDuration.coerceAtLeast(0),
+                playbackState = controller.playbackState,
+                playbackSpeed = controller.playbackParameters.speed,
+                volume = controller.volume,
             )
         }
         refresh()
@@ -144,6 +179,9 @@ fun rememberPlayerUiState(controller: MediaController?): PlayerUiState {
             override fun onPlaybackStateChanged(playbackState: Int) = refresh()
             override fun onRepeatModeChanged(repeatMode: Int) = refresh()
             override fun onShuffleModeEnabledChanged(shuffleModeEnabled: Boolean) = refresh()
+            override fun onTracksChanged(tracks: Tracks) = refresh()
+            override fun onPlaybackParametersChanged(playbackParameters: PlaybackParameters) = refresh()
+            override fun onVolumeChanged(volume: Float) = refresh()
         }
         controller.addListener(listener)
         onDispose { controller.removeListener(listener) }
@@ -156,6 +194,8 @@ fun rememberPlayerUiState(controller: MediaController?): PlayerUiState {
             state = state.copy(
                 positionMs = controller.currentPosition.coerceAtLeast(0),
                 durationMs = controller.duration.coerceAtLeast(0),
+                bufferedPositionMs = controller.bufferedPosition.coerceAtLeast(0),
+                totalBufferedDurationMs = controller.totalBufferedDuration.coerceAtLeast(0),
             )
         }
     }
@@ -291,6 +331,7 @@ fun FullPlayerScreen(
     // Live position shown while the user is actively dragging the seek bar, since
     // state.positionMs only reflects real playback and lags behind the finger.
     var liveDragFraction by remember { mutableStateOf<Float?>(null) }
+    var showStatsForNerds by remember { mutableStateOf(false) }
 
     // Surface (not a plain .background() modifier) so it propagates the correct text
     // color to every un-colored Text below via LocalContentColor - this screen is an
@@ -391,6 +432,9 @@ fun FullPlayerScreen(
             IconButton(onClick = onOpenQueue) {
                 Icon(Icons.AutoMirrored.Filled.QueueMusic, contentDescription = "Queue")
             }
+            IconButton(onClick = { showStatsForNerds = true }) {
+                Icon(Icons.Filled.Info, contentDescription = "Stats for nerds")
+            }
         }
 
         Spacer(Modifier.height(20.dp))
@@ -482,6 +526,10 @@ fun FullPlayerScreen(
             }
         }
         }
+
+        if (showStatsForNerds) {
+            StatsForNerdsDialog(state = state, onDismiss = { showStatsForNerds = false })
+        }
     }
     }
     }
@@ -566,4 +614,66 @@ private fun formatDuration(ms: Long): String {
     val minutes = totalSeconds / 60
     val seconds = totalSeconds % 60
     return "%d:%02d".format(minutes, seconds)
+}
+
+/**
+ * A YouTube-style "stats for nerds" panel: raw playback diagnostics read straight off
+ * [PlayerUiState], which already mirrors them live off the MediaController (see
+ * rememberPlayerUiState) - no separate polling needed here. Uses a real AlertDialog rather than
+ * another top-level overlay so back-press-to-dismiss comes for free instead of needing to be
+ * wired into MainActivity's overlay BackHandler stack like the queue/lyrics/settings screens.
+ */
+@Composable
+private fun StatsForNerdsDialog(state: PlayerUiState, onDismiss: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Close") } },
+        title = { Text("Stats for nerds") },
+        text = {
+            Column {
+                NerdStatRow("Media ID", state.mediaId.ifBlank { "—" })
+                NerdStatRow("Codec", state.audioCodec ?: "—")
+                NerdStatRow("Bitrate", if (state.audioBitrateBps > 0) "${state.audioBitrateBps / 1000} kbps" else "—")
+                NerdStatRow(
+                    "Sample rate",
+                    if (state.audioSampleRateHz > 0) "${state.audioSampleRateHz} Hz" else "—",
+                )
+                NerdStatRow("Channels", channelLabel(state.audioChannelCount))
+                NerdStatRow(
+                    "Buffered ahead",
+                    formatDuration((state.bufferedPositionMs - state.positionMs).coerceAtLeast(0)),
+                )
+                NerdStatRow("Total buffer", formatDuration(state.totalBufferedDurationMs))
+                NerdStatRow("Player state", playbackStateLabel(state.playbackState))
+                NerdStatRow("Speed", "${state.playbackSpeed}x")
+                NerdStatRow("Volume", "${(state.volume * 100).toInt()}%")
+            }
+        },
+    )
+}
+
+@Composable
+private fun NerdStatRow(label: String, value: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Text(label, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(value, style = MaterialTheme.typography.bodyMedium, fontWeight = FontWeight.Medium)
+    }
+}
+
+private fun channelLabel(count: Int): String = when (count) {
+    0 -> "—"
+    1 -> "Mono"
+    2 -> "Stereo"
+    else -> "$count ch"
+}
+
+private fun playbackStateLabel(state: Int): String = when (state) {
+    Player.STATE_IDLE -> "Idle"
+    Player.STATE_BUFFERING -> "Buffering"
+    Player.STATE_READY -> "Ready"
+    Player.STATE_ENDED -> "Ended"
+    else -> "Unknown"
 }

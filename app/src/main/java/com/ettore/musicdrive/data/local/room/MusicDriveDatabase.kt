@@ -4,8 +4,15 @@ import androidx.room.Database
 import androidx.room.RoomDatabase
 
 @Database(
-    entities = [AlbumEntity::class, TrackEntity::class, LyricsEntity::class, PlayCountEntity::class, AlbumYearEntity::class],
-    version = 5,
+    entities = [
+        AlbumEntity::class,
+        TrackEntity::class,
+        LyricsEntity::class,
+        PlayCountEntity::class,
+        AlbumYearEntity::class,
+        TrackOrderEntity::class,
+    ],
+    version = 6,
     exportSchema = false,
 )
 abstract class MusicDriveDatabase : RoomDatabase() {
@@ -13,4 +20,5 @@ abstract class MusicDriveDatabase : RoomDatabase() {
     abstract fun lyricsDao(): LyricsDao
     abstract fun playCountDao(): PlayCountDao
     abstract fun albumYearDao(): AlbumYearDao
+    abstract fun trackOrderDao(): TrackOrderDao
 }

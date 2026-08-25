@@ -62,6 +62,7 @@ private val albumSortOptions = listOf(
     "Release year (newest first)" to AlbumSortMode.YEAR,
     "Name (A–Z)" to AlbumSortMode.NAME,
     "Track count" to AlbumSortMode.TRACK_COUNT,
+    "Artist name (A–Z)" to AlbumSortMode.ARTIST_NAME,
 )
 
 @Composable

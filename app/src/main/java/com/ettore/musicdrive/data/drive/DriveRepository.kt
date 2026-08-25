@@ -48,6 +48,21 @@ private val discFolderPattern = Regex("""(?i)^(cd|disc)\s*(\d+)""")
 private fun discNumber(folderName: String): Int =
     discFolderPattern.find(folderName)?.groupValues?.get(2)?.toIntOrNull() ?: Int.MAX_VALUE
 
+/** Matches the leading track number in a filename, e.g. "01 - Song.mp3", "2. Song.mp3", "07 Song.flac". */
+private val leadingTrackNumberPattern = Regex("""^\s*0*(\d+)""")
+
+/**
+ * Track number parsed from the front of a filename, for sorting an album's tracks into their real
+ * running order. Drive's own `orderBy("name")` is a lexicographic STRING sort, so without this,
+ * "10 - Song.mp3" sorts before "2 - Song.mp3" - a real, user-visible bug (album track order was
+ * scrambled for any album past 9 tracks). Falls back to Int.MAX_VALUE (sorts last, then by name)
+ * for a track with no leading number at all.
+ */
+private fun DriveFile.trackNumber(): Int =
+    leadingTrackNumberPattern.find(name)?.groupValues?.get(1)?.toIntOrNull() ?: Int.MAX_VALUE
+
+private val trackOrderComparator = compareBy<DriveFile>({ it.trackNumber() }, { it.name })
+
 private data class AlbumFolderWithArtist(
     val folder: DriveFolder,
     val artistName: String?,
@@ -100,13 +115,36 @@ class DriveRepository(private val tokenProvider: DriveTokenProvider) {
     }
 
     private suspend fun listFoldersRaw(drive: Drive, parentId: String): List<DriveFolder> = withContext(Dispatchers.IO) {
-        drive.files().list()
-            .setQ("'$parentId' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false")
-            .setFields("files(id, name)")
-            .setOrderBy("name")
-            .setPageSize(100)
-            .execute()
-            .files.orEmpty().map { it.toDriveFolder() }
+        listAllPages { pageToken ->
+            drive.files().list()
+                .setQ("'$parentId' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false")
+                .setFields("nextPageToken, files(id, name)")
+                .setOrderBy("name")
+                .setPageSize(100)
+                .setPageToken(pageToken)
+                .execute()
+                .let { it.files.orEmpty() to it.nextPageToken }
+        }.map { it.toDriveFolder() }
+    }
+
+    /**
+     * Drive's `pageSize` is a NOMINAL limit, not an exact one - the server can hand back fewer
+     * results than requested even when more exist, via `nextPageToken`, and a caller that reads
+     * only the first page silently drops whatever landed on later pages. This was a real bug: the
+     * combined tracks query below (a big `or`-chained query across every album's source folders)
+     * would occasionally come back short, so some albums loaded with a subset of their songs and
+     * no indication anything was missing. Every multi-result Drive list call must page through
+     * [nextPageToken] to exhaustion instead of trusting one `execute()` to be complete.
+     */
+    private suspend fun listAllPages(fetchPage: suspend (pageToken: String?) -> Pair<List<DriveFile>, String?>): List<DriveFile> {
+        val results = mutableListOf<DriveFile>()
+        var pageToken: String? = null
+        do {
+            val (files, nextPageToken) = fetchPage(pageToken)
+            results += files
+            pageToken = nextPageToken
+        } while (pageToken != null)
+        return results
     }
 
     private suspend fun folderHasAudioFiles(drive: Drive, folderId: String): Boolean = withContext(Dispatchers.IO) {
@@ -208,18 +246,23 @@ class DriveRepository(private val tokenProvider: DriveTokenProvider) {
         val parentsClause = albumFolders
             .flatMap { it.sourceFolderIds }
             .joinToString(separator = " or ") { "'$it' in parents" }
-        val tracks = drive.files().list()
-            .setQ("($parentsClause) and mimeType contains 'audio/' and trashed = false")
-            .setFields("files(id, name, mimeType, size, parents)")
-            .setOrderBy("name")
-            .setPageSize(1000)
-            .execute()
-            .files.orEmpty()
+        val tracks = listAllPages { pageToken ->
+            drive.files().list()
+                .setQ("($parentsClause) and mimeType contains 'audio/' and trashed = false")
+                .setFields("nextPageToken, files(id, name, mimeType, size, parents)")
+                .setOrderBy("name")
+                .setPageSize(1000)
+                .setPageToken(pageToken)
+                .execute()
+                .let { it.files.orEmpty() to it.nextPageToken }
+        }
 
-        // Real physical parent folder id -> tracks, name-sorted (Drive's orderBy=name
-        // sorts the whole flat result set, and groupBy preserves each key's relative
-        // order, so every per-folder sublist comes out name-sorted too).
-        val tracksByParentFolderId = tracks.groupBy { it.parents?.firstOrNull() }
+        // Real physical parent folder id -> tracks, sorted into real track-number order
+        // within each folder (see trackOrderComparator - NOT Drive's own orderBy=name,
+        // which is a lexicographic string sort and scrambles anything past track 9).
+        val tracksByParentFolderId = tracks
+            .groupBy { it.parents?.firstOrNull() }
+            .mapValues { (_, folderTracks) -> folderTracks.sortedWith(trackOrderComparator) }
         albumFolders
             .map { entry ->
                 DriveAlbum(

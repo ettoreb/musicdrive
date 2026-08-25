@@ -14,7 +14,7 @@ enum class ThemeMode { SYSTEM, LIGHT, DARK }
 
 enum class LibraryViewMode { ARTISTS, ALBUMS }
 
-enum class AlbumSortMode { NAME, TRACK_COUNT, YEAR }
+enum class AlbumSortMode { NAME, TRACK_COUNT, YEAR, ARTIST_NAME }
 
 class SettingsRepository(private val context: Context) {
 

@@ -1,6 +1,8 @@
 package com.ettore.musicdrive
 
 import android.content.ComponentName
+import android.graphics.Bitmap
+import android.graphics.Canvas as AndroidCanvas
 import android.os.Build
 import android.os.Bundle
 import android.os.StatFs
@@ -9,6 +11,7 @@ import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,6 +19,9 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.filled.Home
@@ -45,8 +51,13 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
@@ -136,11 +147,11 @@ class MainActivity : ComponentActivity() {
         tokenProvider.setAuthorizer(driveAuthorizationManager)
         driveRepository = DriveRepository(tokenProvider)
         libraryRepository = LibraryRepository(driveRepository, app.database.libraryDao())
-        albumArtRepository = AlbumArtRepository(this, tokenProvider, app.database.albumYearDao())
+        albumArtRepository = AlbumArtRepository(this, tokenProvider, app.database.albumYearDao(), app.database.trackOrderDao())
         settingsRepository = app.settingsRepository
         lyricsRepository = LyricsRepository(app.database.lyricsDao())
         downloadTracker = app.downloadTracker
-        playStatsRepository = PlayStatsRepository(app.database.playCountDao())
+        playStatsRepository = app.playStatsRepository
 
         val sessionToken = SessionToken(this, ComponentName(this, MusicPlaybackService::class.java))
         controllerFuture = MediaController.Builder(this, sessionToken).buildAsync()
@@ -431,6 +442,24 @@ private fun MusicDriveApp(
     }
     val yearOf: (DriveAlbum) -> Int? = { albumYears[it.id] }
 
+    // Real track order (see AlbumArtRepository.resolveTrackOrder) is resolved lazily per album,
+    // only for whichever album is currently open - unlike year resolution above, doing this
+    // eagerly for the WHOLE library would mean one MediaMetadataRetriever probe per TRACK
+    // (1000+ for a real library) instead of per album, far too slow to run on every launch.
+    // Merged back into both `state` and the current route (same pattern as refreshCurrentAlbum)
+    // so AlbumDetailScreen re-renders with the corrected order and Home/Search/playback - which
+    // all read tracks off this same shared album list - stay consistent with what's displayed.
+    LaunchedEffect((libraryRoute as? LibraryRoute.AlbumDetail)?.album?.id) {
+        val route = libraryRoute as? LibraryRoute.AlbumDetail ?: return@LaunchedEffect
+        val resolved = albumArtRepository.resolveTrackOrder(route.album)
+        val current = state as? AppState.LibraryLoaded ?: return@LaunchedEffect
+        state = current.copy(albums = current.albums.map { if (it.id == resolved.id) resolved else it })
+        val stillOnRoute = libraryRoute
+        if (stillOnRoute is LibraryRoute.AlbumDetail && stillOnRoute.album.id == resolved.id) {
+            libraryRoute = stillOnRoute.copy(album = resolved)
+        }
+    }
+
     // Hoisted out of the Home route so the Stats screen can reuse the same computed
     // lists without a separate route-scoped duplicate.
     val homeItems = remember(topTrackCounts, trackLocations) {
@@ -494,6 +523,14 @@ private fun MusicDriveApp(
 
     Box(modifier = Modifier.fillMaxSize()) {
         Scaffold(
+            topBar = {
+                // Only on the four top-level tabs - AlbumDetail/ArtistAlbums already have their
+                // own back-button+title ScreenHeader, and stacking both reads as clutter.
+                val onTopLevelRoute = libraryRoute.let { it !is LibraryRoute.AlbumDetail && it !is LibraryRoute.ArtistAlbums }
+                if (state is AppState.LibraryLoaded && onTopLevelRoute) {
+                    MusicDriveTopBar()
+                }
+            },
             bottomBar = {
                 if (state is AppState.LibraryLoaded) {
                     MusicDriveBottomBar(selected = libraryRoute.bottomTab(), onSelect = ::selectBottomTab)
@@ -767,6 +804,59 @@ private fun MusicDriveApp(
     }
 }
 
+/**
+ * Persistent app branding (icon + wordmark), always visible at the top of every top-level tab -
+ * lives in Scaffold's topBar slot so it never scrolls away with a tab's own content, the same way
+ * MusicDriveBottomBar below is always pinned at the bottom.
+ */
+@Composable
+private fun MusicDriveTopBar() {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .statusBarsPadding()
+            .padding(horizontal = 16.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Image(
+            bitmap = rememberAppIconBitmap(),
+            contentDescription = null,
+            modifier = Modifier.size(28.dp).clip(RoundedCornerShape(8.dp)),
+        )
+        Text(
+            "MusicDrive",
+            style = MaterialTheme.typography.titleMedium,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.padding(start = 10.dp),
+        )
+    }
+}
+
+/**
+ * ic_launcher is an <adaptive-icon> XML (background + foreground layers), which
+ * androidx.compose.ui.res.painterResource does NOT support - it throws
+ * IllegalArgumentException("Only VectorDrawables and rasterized asset types are supported"),
+ * confirmed live (real launch crash on a physical device, not a hypothetical). Rasterizing the
+ * drawable into a bitmap ourselves - which correctly composites both adaptive-icon layers, same as
+ * the launcher does - sidesteps that restriction entirely.
+ */
+@Composable
+private fun rememberAppIconBitmap(): ImageBitmap {
+    val context = LocalContext.current
+    return remember {
+        val drawable = ContextCompat.getDrawable(context, R.mipmap.ic_launcher)!!
+        val bitmap = Bitmap.createBitmap(
+            drawable.intrinsicWidth.coerceAtLeast(1),
+            drawable.intrinsicHeight.coerceAtLeast(1),
+            Bitmap.Config.ARGB_8888,
+        )
+        val canvas = AndroidCanvas(bitmap)
+        drawable.setBounds(0, 0, canvas.width, canvas.height)
+        drawable.draw(canvas)
+        bitmap.asImageBitmap()
+    }
+}
+
 @Composable
 private fun MusicDriveBottomBar(selected: BottomTab, onSelect: (BottomTab) -> Unit) {
     NavigationBar {
@@ -816,6 +906,10 @@ private fun AlbumSortMenuButton(current: AlbumSortMode, onChange: (AlbumSortMode
             DropdownMenuItem(
                 text = { Text("Track count") },
                 onClick = { onChange(AlbumSortMode.TRACK_COUNT); expanded = false },
+            )
+            DropdownMenuItem(
+                text = { Text("Artist name (A–Z)") },
+                onClick = { onChange(AlbumSortMode.ARTIST_NAME); expanded = false },
             )
         }
     }

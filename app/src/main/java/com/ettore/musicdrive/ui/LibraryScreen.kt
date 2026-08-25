@@ -38,6 +38,9 @@ fun List<DriveAlbum>.sortedByMode(mode: AlbumSortMode, yearOf: (DriveAlbum) -> I
     AlbumSortMode.TRACK_COUNT -> sortedByDescending { it.tracks.size }
     // Unresolved years (still being looked up) sort to the end rather than the top.
     AlbumSortMode.YEAR -> sortedWith(compareByDescending<DriveAlbum> { yearOf(it) ?: Int.MIN_VALUE }.thenBy { it.name })
+    // Mainly useful on the flat Albums grid (which spans every artist) - a no-op within a
+    // single artist's own album grid, same as it is for an ArtistAlbums-scoped NAME/YEAR sort.
+    AlbumSortMode.ARTIST_NAME -> sortedWith(compareBy({ it.artistHint ?: "" }, { it.name }))
 }
 
 @Composable

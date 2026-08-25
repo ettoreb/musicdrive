@@ -9,6 +9,7 @@ import androidx.media3.exoplayer.offline.DownloadManager
 import androidx.room.Room
 import com.ettore.musicdrive.auth.ContextDriveAuthorizer
 import com.ettore.musicdrive.auth.DriveTokenProvider
+import com.ettore.musicdrive.data.PlayStatsRepository
 import com.ettore.musicdrive.data.local.SettingsRepository
 import com.ettore.musicdrive.data.local.room.MusicDriveDatabase
 import com.ettore.musicdrive.download.DownloadTracker
@@ -58,6 +59,10 @@ class MusicDriveApplication : Application() {
     lateinit var database: MusicDriveDatabase
         private set
 
+    /** Play counts, backed by a JSON file outside the Room DB so they survive a destructive schema migration - see PlayStatsRepository. */
+    lateinit var playStatsRepository: PlayStatsRepository
+        private set
+
     /**
      * Auto-managed, evictable cache for streamed playback. Its effective budget is the
      * user-configurable "Storage" limit minus whatever downloadCache is already using (one
@@ -96,6 +101,9 @@ class MusicDriveApplication : Application() {
             .fallbackToDestructiveMigration(dropAllTables = true)
             .build()
         databaseProvider = StandaloneDatabaseProvider(this)
+
+        playStatsRepository = PlayStatsRepository(database.playCountDao(), File(filesDir, "play_stats_backup.json"))
+        applicationScope.launch { playStatsRepository.restoreFromBackupIfEmpty() }
 
         val streamingEvictor = AdjustableLruEvictor(SettingsRepository.DEFAULT_CACHE_LIMIT_BYTES)
         streamingCache = SimpleCache(

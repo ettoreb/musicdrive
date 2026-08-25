@@ -5,11 +5,18 @@ import android.media.MediaMetadataRetriever
 import com.ettore.musicdrive.auth.DriveTokenProvider
 import com.ettore.musicdrive.data.local.room.AlbumYearDao
 import com.ettore.musicdrive.data.local.room.AlbumYearEntity
+import com.ettore.musicdrive.data.local.room.TrackOrderDao
+import com.ettore.musicdrive.data.local.room.TrackOrderEntity
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 
@@ -35,6 +42,7 @@ class AlbumArtRepository(
     context: Context,
     private val tokenProvider: DriveTokenProvider,
     private val yearDao: AlbumYearDao,
+    private val trackOrderDao: TrackOrderDao,
 ) {
     private val diskCacheDir = File(context.filesDir, "album_art").apply { mkdirs() }
     private val artistArtDiskCacheDir = File(context.filesDir, "artist_art").apply { mkdirs() }
@@ -147,6 +155,73 @@ class AlbumArtRepository(
         yearDao.upsert(AlbumYearEntity(album.id, year))
         yearMemoryCache[album.id] = year
         year
+    }
+
+    /**
+     * An album's tracks in their REAL running order, resolved from each track's own embedded
+     * CD-track-number tag (ID3 TRCK or equivalent) rather than the Drive filename.
+     * DriveRepository's filename-based sort (leading digits in the name) only works for
+     * libraries ripped/named with a "01 - Song.mp3" convention; a library whose files are just
+     * "Song Title.mp3" (confirmed live: Gorillaz's "Cracker Island" - no leading numbers at
+     * all, some other libraries even have a song whose TITLE starts with a digit, e.g.
+     * "26.mp3", "777.mp3", which the filename heuristic misreads as an actual track number)
+     * has no other signal to sort by and falls back to plain alphabetical, which is not the
+     * real tracklist order. This probes each track individually instead. Every result -
+     * including "no tag found" - is cached per-track in Room, so this network round trip only
+     * ever happens once per track, not once per album view; a subsequent open of the same
+     * album is a single batched Room read with zero network calls. Bounded concurrency (see
+     * the year-resolution comment on MainActivity's yearResolveSemaphore for why): opening a
+     * MediaMetadataRetriever is a heavyweight binder-backed HTTP session, and firing one per
+     * track unbounded for a 30-track album starves the binder thread pool the same way it did
+     * for concurrent per-album year resolution.
+     */
+    suspend fun resolveTrackOrder(album: DriveAlbum): DriveAlbum = withContext(Dispatchers.IO) {
+        val cached = trackOrderDao.getForTracks(album.tracks.map { it.id }).associateBy { it.trackId }
+        val numbers = cached.mapValuesTo(mutableMapOf()) { it.value.trackNumber }
+
+        val missing = album.tracks.filterNot { it.id in cached }
+        if (missing.isNotEmpty()) {
+            val semaphore = Semaphore(4)
+            coroutineScope {
+                missing.map { track ->
+                    async {
+                        semaphore.withPermit {
+                            val number = extractEmbeddedTrackNumber(track)
+                            trackOrderDao.upsert(TrackOrderEntity(track.id, number))
+                            numbers[track.id] = number
+                        }
+                    }
+                }.awaitAll()
+            }
+        }
+
+        // Stable: a track with no resolved number (no tag, or the lookup failed) keeps its
+        // original relative position instead of being shoved to one arbitrary end.
+        val originalIndex = album.tracks.withIndex().associate { (i, t) -> t.id to i }
+        val orderedTracks = album.tracks.sortedWith(
+            compareBy({ numbers[it.id] ?: Int.MAX_VALUE }, { originalIndex.getValue(it.id) }),
+        )
+        album.copy(tracks = orderedTracks)
+    }
+
+    private suspend fun extractEmbeddedTrackNumber(track: DriveAudioFile): Int? {
+        val token = tokenProvider.getAccessToken().getOrNull() ?: return null
+        val retriever = MediaMetadataRetriever()
+        return try {
+            retriever.setDataSource(
+                "https://www.googleapis.com/drive/v3/files/${track.id}?alt=media",
+                mapOf("Authorization" to "Bearer $token"),
+            )
+            // Tags sometimes encode "track/total" (e.g. "3/12") - only the track half matters here.
+            retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_CD_TRACK_NUMBER)
+                ?.substringBefore('/')
+                ?.trim()
+                ?.toIntOrNull()
+        } catch (e: Exception) {
+            null
+        } finally {
+            retriever.release()
+        }
     }
 
     private suspend fun openRetriever(album: DriveAlbum): MediaMetadataRetriever? {
