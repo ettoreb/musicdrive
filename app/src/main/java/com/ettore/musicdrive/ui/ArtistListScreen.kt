@@ -46,7 +46,7 @@ fun List<DriveAlbum>.groupByArtist(): List<ArtistSummary> =
 fun ArtistListScreen(
     artists: List<ArtistSummary>,
     onArtistClick: (ArtistSummary) -> Unit,
-    resolveArt: suspend (DriveAlbum) -> Any?,
+    resolveArtistArt: suspend (String) -> Any?,
     modifier: Modifier = Modifier,
 ) {
     if (artists.isEmpty()) {
@@ -64,17 +64,15 @@ fun ArtistListScreen(
         verticalArrangement = Arrangement.spacedBy(GRID_SPACING),
     ) {
         items(artists, key = { it.name }) { artist ->
-            ArtistGridItem(artist = artist, onClick = { onArtistClick(artist) }, resolveArt = resolveArt)
+            ArtistGridItem(artist = artist, onClick = { onArtistClick(artist) }, resolveArtistArt = resolveArtistArt)
         }
     }
 }
 
 @Composable
-private fun ArtistGridItem(artist: ArtistSummary, onClick: () -> Unit, resolveArt: suspend (DriveAlbum) -> Any?) {
-    // No per-artist artwork concept exists - stand in with the first album's cover, like most music apps do.
-    val representativeAlbum = artist.albums.firstOrNull()
+private fun ArtistGridItem(artist: ArtistSummary, onClick: () -> Unit, resolveArtistArt: suspend (String) -> Any?) {
     var art by remember(artist.name) { mutableStateOf<Any?>(null) }
-    LaunchedEffect(artist.name) { art = representativeAlbum?.let { resolveArt(it) } }
+    LaunchedEffect(artist.name) { art = resolveArtistArt(artist.name) }
 
     Column(modifier = Modifier.fillMaxWidth().clickable(onClick = onClick)) {
         Box(

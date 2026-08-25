@@ -33,6 +33,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
@@ -71,6 +72,7 @@ fun SettingsScreen(
     onCacheLimitChange: (Long) -> Unit,
     streamingCacheUsageBytes: Long,
     artDiskUsageBytes: Long,
+    freeStorageBytes: Long,
     downloads: Map<String, Download>,
     albums: List<DriveAlbum>,
     onRemoveDownloadedAlbum: (DriveAlbum) -> Unit,
@@ -187,6 +189,7 @@ fun SettingsScreen(
     if (showStorageDialog) {
         StorageSizeDialog(
             current = cacheLimitBytes,
+            freeStorageBytes = freeStorageBytes,
             onConfirm = { bytes -> onCacheLimitChange(bytes); showStorageDialog = false },
             onDismiss = { showStorageDialog = false },
         )
@@ -260,28 +263,66 @@ private fun DownloadRow(title: String, sizeBytes: Long, onRemove: (() -> Unit)?)
 }
 
 @Composable
-private fun StorageSizeDialog(current: Long, onConfirm: (Long) -> Unit, onDismiss: () -> Unit) {
+private fun StorageSizeDialog(current: Long, freeStorageBytes: Long, onConfirm: (Long) -> Unit, onDismiss: () -> Unit) {
     val currentIndex = cacheSizeOptions.indexOfFirst { it.second == current }.takeIf { it >= 0 } ?: 1
-    var sliderIndex by remember { mutableStateOf(currentIndex.toFloat()) }
+    var selectedIndex by remember { mutableStateOf(currentIndex) }
+
+    // The highest preset that still fits in the device's actual free space right now - the
+    // slider can't be dragged past it, since offering a limit bigger than what's physically
+    // available would just mean the cache silently never reaches it. Always allow at least
+    // the lowest preset, and never allow going ABOVE the option the current limit already sits
+    // at, so an existing (larger) limit set while more space was free still displays correctly
+    // and isn't silently lowered just by opening this dialog.
+    val maxFittingIndex = cacheSizeOptions.indexOfLast { it.second <= freeStorageBytes }
+        .let { if (it < 0) 0 else it }
+        .coerceAtLeast(currentIndex)
 
     Dialog(onDismissRequest = onDismiss) {
         Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surface) {
             Column(modifier = Modifier.padding(24.dp)) {
                 Text("Storage limit", style = MaterialTheme.typography.titleMedium)
                 Text(
-                    cacheSizeOptions[sliderIndex.roundToInt()].first,
+                    cacheSizeOptions[selectedIndex].first,
                     style = MaterialTheme.typography.headlineSmall,
                     modifier = Modifier.padding(top = 16.dp, bottom = 8.dp),
                 )
+                Text(
+                    "${formatBytes(freeStorageBytes)} free on device",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(bottom = 8.dp),
+                )
                 Slider(
-                    value = sliderIndex,
-                    onValueChange = { sliderIndex = it },
+                    value = selectedIndex.toFloat(),
+                    onValueChange = { selectedIndex = it.roundToInt().coerceAtMost(maxFittingIndex) },
                     valueRange = 0f..(cacheSizeOptions.size - 1).toFloat(),
                     steps = cacheSizeOptions.size - 2,
                 )
+                // Explicit, individually-tappable labels for every step - dragging the
+                // slider by feel wasn't a clear enough way to pick a specific size, so
+                // each option is also its own tap target directly below its tick mark.
+                // Options bigger than what actually fits are dimmed and not selectable.
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    cacheSizeOptions.forEachIndexed { index, (label, _) ->
+                        val fits = index <= maxFittingIndex
+                        Text(
+                            label,
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = if (index == selectedIndex) FontWeight.Bold else FontWeight.Normal,
+                            color = when {
+                                !fits -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
+                                index == selectedIndex -> MaterialTheme.colorScheme.primary
+                                else -> MaterialTheme.colorScheme.onSurfaceVariant
+                            },
+                            modifier = Modifier
+                                .clickable(enabled = fits) { selectedIndex = index }
+                                .padding(vertical = 4.dp, horizontal = 2.dp),
+                        )
+                    }
+                }
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                     TextButton(onClick = onDismiss) { Text("Cancel") }
-                    TextButton(onClick = { onConfirm(cacheSizeOptions[sliderIndex.roundToInt()].second) }) { Text("Save") }
+                    TextButton(onClick = { onConfirm(cacheSizeOptions[selectedIndex].second) }) { Text("Save") }
                 }
             }
         }

@@ -47,22 +47,26 @@ class LibraryRepository(
             emit(Result.success(cached))
         }
 
-        driveRepository.listLibraryAlbums(rootFolderId).fold(
-            onSuccess = { albums ->
-                libraryDao.replaceLibrary(
-                    rootFolderId,
-                    albums.map { it.toAlbumEntity(rootFolderId) },
-                    albums.flatMap { album -> album.tracks.map { it.toTrackEntity(album.id) } },
-                )
-                emit(Result.success(albums))
-            },
-            onFailure = { e ->
-                if (cached.isEmpty()) {
-                    emit(Result.failure(e))
-                }
-            },
+        refreshLibrary(rootFolderId).fold(
+            onSuccess = { albums -> emit(Result.success(albums)) },
+            onFailure = { e -> if (cached.isEmpty()) emit(Result.failure(e)) },
         )
     }
+
+    /**
+     * One-shot live Drive fetch + Room write, without [loadLibrary]'s "emit cache first" step -
+     * for an explicit user-triggered refresh (e.g. pull-to-refresh on an album page) where the
+     * caller already has data on screen and just wants whatever's newly on Drive, such as a
+     * song someone just added to that album's folder.
+     */
+    suspend fun refreshLibrary(rootFolderId: String): Result<List<DriveAlbum>> =
+        driveRepository.listLibraryAlbums(rootFolderId).onSuccess { albums ->
+            libraryDao.replaceLibrary(
+                rootFolderId,
+                albums.map { it.toAlbumEntity(rootFolderId) },
+                albums.flatMap { album -> album.tracks.map { it.toTrackEntity(album.id) } },
+            )
+        }
 
     /** Only one library root is active at a time; call when the user picks a different folder. */
     suspend fun clearCache() {

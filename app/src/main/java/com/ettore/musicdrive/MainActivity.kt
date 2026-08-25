@@ -3,6 +3,7 @@ package com.ettore.musicdrive
 import android.content.ComponentName
 import android.os.Build
 import android.os.Bundle
+import android.os.StatFs
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
@@ -44,6 +45,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
@@ -249,7 +251,10 @@ private fun MusicDriveApp(
     var isQueueVisible by remember { mutableStateOf(false) }
     var isLyricsVisible by remember { mutableStateOf(false) }
     var isStatsVisible by remember { mutableStateOf(false) }
+    var currentRootFolderId by remember { mutableStateOf<String?>(null) }
+    var isRefreshingAlbum by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
 
     fun selectBottomTab(tab: BottomTab) {
         libraryRoute = when (tab) {
@@ -261,6 +266,7 @@ private fun MusicDriveApp(
     }
 
     suspend fun loadLibrary(rootFolderId: String, rootFolderName: String?) {
+        currentRootFolderId = rootFolderId
         state = AppState.Loading
         // Always reopens on Home, matching every mainstream music app's launch behavior -
         // Search/Library/Settings are reachable in one tap from the bottom nav regardless.
@@ -273,6 +279,33 @@ private fun MusicDriveApp(
                 onSuccess = { albums -> state = AppState.LibraryLoaded(rootFolderName, albums) },
                 onFailure = { e -> state = AppState.Error(e.message ?: "Failed to list Drive files") },
             )
+        }
+    }
+
+    // Pull-to-refresh on the album detail page: re-fetches the WHOLE library from Drive (same
+    // cost as the background refresh loadLibrary already does on every launch, cheap at
+    // personal-library scale) rather than just this one album's folder, so a newly added song
+    // shows up whichever album/artist view the user goes back to, not just this screen. Keeps
+    // the current route instead of resetting to Home, and swaps in the refreshed album object
+    // (by id) so the currently-open AlbumDetail screen shows the new track immediately.
+    fun refreshCurrentAlbum(albumId: String) {
+        val rootFolderId = currentRootFolderId ?: return
+        if (isRefreshingAlbum) return
+        scope.launch {
+            isRefreshingAlbum = true
+            try {
+                libraryRepository.refreshLibrary(rootFolderId).onSuccess { albums ->
+                    val current = state as? AppState.LibraryLoaded ?: return@onSuccess
+                    state = current.copy(albums = albums)
+                    val refreshedAlbum = albums.find { it.id == albumId }
+                    val route = libraryRoute
+                    if (refreshedAlbum != null && route is LibraryRoute.AlbumDetail && route.album.id == albumId) {
+                        libraryRoute = route.copy(album = refreshedAlbum)
+                    }
+                }
+            } finally {
+                isRefreshingAlbum = false
+            }
         }
     }
 
@@ -341,10 +374,15 @@ private fun MusicDriveApp(
     // even looking at the Storage section.
     var streamingCacheUsageBytes by remember { mutableStateOf(0L) }
     var artDiskUsageBytes by remember { mutableStateOf(0L) }
+    var freeStorageBytes by remember { mutableStateOf(0L) }
     LaunchedEffect(libraryRoute) {
         if (libraryRoute is LibraryRoute.Settings) {
             streamingCacheUsageBytes = streamingCache.cacheSpace
             artDiskUsageBytes = albumArtRepository.diskUsageBytes()
+            // Real device free space (same internal-storage partition filesDir/cacheDir both
+            // live on) - shown in the storage dialog so the size slider can't offer a limit
+            // bigger than what's actually available right now.
+            freeStorageBytes = StatFs(context.filesDir.path).availableBytes
         }
     }
 
@@ -527,6 +565,7 @@ private fun MusicDriveApp(
                                         }
                                     },
                                     resolveArt = albumArtRepository::resolveArt,
+                                    resolveArtistArt = albumArtRepository::resolveArtistArt,
                                     modifier = Modifier.weight(1f),
                                 )
                             }
@@ -562,7 +601,7 @@ private fun MusicDriveApp(
                                     LibraryViewMode.ARTISTS -> ArtistListScreen(
                                         artists = current.albums.groupByArtist(),
                                         onArtistClick = { libraryRoute = LibraryRoute.ArtistAlbums(it) },
-                                        resolveArt = albumArtRepository::resolveArt,
+                                        resolveArtistArt = albumArtRepository::resolveArtistArt,
                                         modifier = Modifier.weight(1f),
                                     )
 
@@ -600,6 +639,7 @@ private fun MusicDriveApp(
                                 onCacheLimitChange = { bytes -> scope.launch { settingsRepository.setCacheLimitBytes(bytes) } },
                                 streamingCacheUsageBytes = streamingCacheUsageBytes,
                                 artDiskUsageBytes = artDiskUsageBytes,
+                                freeStorageBytes = freeStorageBytes,
                                 downloads = downloads,
                                 albums = loadedAlbums,
                                 onRemoveDownloadedAlbum = { album -> downloadTracker.removeAlbum(album) },
@@ -633,6 +673,8 @@ private fun MusicDriveApp(
                                 resolveArt = albumArtRepository::resolveArt,
                                 currentlyPlayingTrackId = playerUiState.mediaId.ifBlank { null },
                                 isPlaying = playerUiState.isPlaying,
+                                isRefreshing = isRefreshingAlbum,
+                                onRefresh = { refreshCurrentAlbum(route.album.id) },
                                 onBack = { libraryRoute = route.backTo },
                                 onTrackClick = { index ->
                                     onPlayAlbum(route.album, index)

@@ -37,7 +37,9 @@ class AlbumArtRepository(
     private val yearDao: AlbumYearDao,
 ) {
     private val diskCacheDir = File(context.filesDir, "album_art").apply { mkdirs() }
+    private val artistArtDiskCacheDir = File(context.filesDir, "artist_art").apply { mkdirs() }
     private val artMemoryCache = mutableMapOf<String, File?>()
+    private val artistArtMemoryCache = mutableMapOf<String, File?>()
     private val yearMemoryCache = mutableMapOf<String, Int?>()
 
     /**
@@ -77,6 +79,58 @@ class AlbumArtRepository(
 
         artMemoryCache[album.id] = null
         null
+    }
+
+    /**
+     * Artist portrait, from the internet - there's no per-artist artwork concept in a Drive
+     * library (unlike albums, an "artist" here is just a grouping of album folders, so there's
+     * no embedded-tag source to try first). Uses the Deezer search API (free, no key) since
+     * iTunes's musicArtist entity - already used for album art/year above - doesn't return an
+     * artist image at all. Disk-cached (filesDir, survives OS cache-clearing, same as album art)
+     * and memory-cached for the process lifetime, including a cached "not found" null.
+     */
+    suspend fun resolveArtistArt(artistName: String): File? = withContext(Dispatchers.IO) {
+        artistArtMemoryCache[artistName]?.let { return@withContext it }
+        if (artistArtMemoryCache.containsKey(artistName)) return@withContext null
+
+        val safeName = artistName.replace(Regex("[^a-zA-Z0-9]"), "_")
+        val cachedFile = File(artistArtDiskCacheDir, "$safeName.jpg")
+        if (cachedFile.exists()) {
+            artistArtMemoryCache[artistName] = cachedFile
+            return@withContext cachedFile
+        }
+
+        val imageUrl = fetchDeezerArtistImageUrl(artistName)
+        val downloaded = imageUrl?.let { downloadBytes(it) }
+        if (downloaded != null) {
+            runCatching { cachedFile.writeBytes(downloaded) }
+            artistArtMemoryCache[artistName] = cachedFile
+            return@withContext cachedFile
+        }
+
+        artistArtMemoryCache[artistName] = null
+        null
+    }
+
+    private fun fetchDeezerArtistImageUrl(artistName: String): String? {
+        val encodedQuery = URLEncoder.encode(artistName, "UTF-8")
+        val url = URL("https://api.deezer.com/search/artist?q=$encodedQuery&limit=1")
+        var connection: HttpURLConnection? = null
+        return try {
+            connection = (url.openConnection() as HttpURLConnection).apply {
+                connectTimeout = 10_000
+                readTimeout = 10_000
+            }
+            val body = connection.inputStream.bufferedReader().use { it.readText() }
+            val results = JSONObject(body).getJSONArray("data")
+            if (results.length() == 0) return null
+            val result = results.getJSONObject(0)
+            result.optString("picture_xl").ifBlank { result.optString("picture_big") }.ifBlank { null }
+        } catch (e: Exception) {
+            null
+        } finally {
+            connection?.disconnect()
+        }
     }
 
     /** Release year, embedded tag first then iTunes fallback. Cached in Room so it survives process restarts and is known up front for sorting. */

@@ -17,11 +17,13 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.DownloadDone
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledIconButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -41,6 +43,7 @@ import com.ettore.musicdrive.data.drive.DriveAlbum
 import com.ettore.musicdrive.download.AlbumDownloadState
 import com.ettore.musicdrive.download.albumDownloadState
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AlbumDetailScreen(
     album: DriveAlbum,
@@ -48,6 +51,8 @@ fun AlbumDetailScreen(
     resolveArt: suspend (DriveAlbum) -> Any?,
     currentlyPlayingTrackId: String?,
     isPlaying: Boolean,
+    isRefreshing: Boolean,
+    onRefresh: () -> Unit,
     onBack: () -> Unit,
     onTrackClick: (index: Int) -> Unit,
     onDownloadAlbum: () -> Unit,
@@ -60,6 +65,9 @@ fun AlbumDetailScreen(
     Column(modifier = modifier.fillMaxSize()) {
         ScreenHeader(title = "", onBack = onBack)
 
+        // Slide down from the track list to re-fetch this album's folder from Drive - picks
+        // up a song someone just added there without needing to leave the screen.
+        PullToRefreshBox(isRefreshing = isRefreshing, onRefresh = onRefresh, modifier = Modifier.fillMaxSize()) {
         LazyColumn(modifier = Modifier.fillMaxSize()) {
             item {
                 Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 24.dp)) {
@@ -143,6 +151,7 @@ fun AlbumDetailScreen(
                     )
                 }
             }
+        }
         }
     }
 }

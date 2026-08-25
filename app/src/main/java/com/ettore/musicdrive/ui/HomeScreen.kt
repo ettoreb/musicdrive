@@ -59,6 +59,7 @@ fun HomeScreen(
     onArtistClick: (ArtistSummary) -> Unit,
     onLikedSongsClick: () -> Unit,
     resolveArt: suspend (DriveAlbum) -> Any?,
+    resolveArtistArt: suspend (String) -> Any?,
     modifier: Modifier = Modifier,
 ) {
     if (topTracks.isEmpty()) {
@@ -86,7 +87,7 @@ fun HomeScreen(
 
         if (topArtists.isNotEmpty()) {
             item(span = { GridItemSpan(maxLineSpan) }) {
-                TopArtistsRow(artists = topArtists, onArtistClick = onArtistClick, resolveArt = resolveArt)
+                TopArtistsRow(artists = topArtists, onArtistClick = onArtistClick, resolveArtistArt = resolveArtistArt)
             }
         }
 
@@ -145,7 +146,7 @@ private fun LikedSongsCard(count: Int, onClick: () -> Unit) {
 private fun TopArtistsRow(
     artists: List<TopArtistItem>,
     onArtistClick: (ArtistSummary) -> Unit,
-    resolveArt: suspend (DriveAlbum) -> Any?,
+    resolveArtistArt: suspend (String) -> Any?,
 ) {
     Column {
         Text(
@@ -155,17 +156,16 @@ private fun TopArtistsRow(
         )
         LazyRow(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
             items(artists, key = { it.artist.name }) { item ->
-                TopArtistTile(item = item, onClick = { onArtistClick(item.artist) }, resolveArt = resolveArt)
+                TopArtistTile(item = item, onClick = { onArtistClick(item.artist) }, resolveArtistArt = resolveArtistArt)
             }
         }
     }
 }
 
 @Composable
-private fun TopArtistTile(item: TopArtistItem, onClick: () -> Unit, resolveArt: suspend (DriveAlbum) -> Any?) {
-    val representativeAlbum = item.artist.albums.firstOrNull()
+private fun TopArtistTile(item: TopArtistItem, onClick: () -> Unit, resolveArtistArt: suspend (String) -> Any?) {
     var art by remember(item.artist.name) { mutableStateOf<Any?>(null) }
-    LaunchedEffect(item.artist.name) { art = representativeAlbum?.let { resolveArt(it) } }
+    LaunchedEffect(item.artist.name) { art = resolveArtistArt(item.artist.name) }
 
     Column(
         modifier = Modifier.width(88.dp).clickable(onClick = onClick),

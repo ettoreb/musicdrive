@@ -282,6 +282,15 @@ fun FullPlayerScreen(
     // Accumulated horizontal drag since the gesture started; a swipe past the
     // threshold on release skips forward/back, like a mini cover carousel.
     var dragTotal by remember { mutableStateOf(0f) }
+    // Accumulated vertical drag since the gesture started; a swipe down past the
+    // threshold on release collapses back to the mini player/library, same as the
+    // chevron button - attached to the whole screen (not just a drag handle) so it
+    // works from anywhere that isn't already claimed by the art's horizontal-skip
+    // or the seek bar's own horizontal drag.
+    var dragDownTotal by remember { mutableStateOf(0f) }
+    // Live position shown while the user is actively dragging the seek bar, since
+    // state.positionMs only reflects real playback and lags behind the finger.
+    var liveDragFraction by remember { mutableStateOf<Float?>(null) }
 
     // Surface (not a plain .background() modifier) so it propagates the correct text
     // color to every un-colored Text below via LocalContentColor - this screen is an
@@ -289,7 +298,20 @@ fun FullPlayerScreen(
     // background() modifier doesn't set it, which silently defaulted to black-on-black
     // text in dark mode (found live, real bug, not a color-tuning nitpick).
     Surface(modifier = modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surface) {
-    Box(modifier = Modifier.fillMaxSize()) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .pointerInput(onCollapse) {
+                detectVerticalDragGestures(
+                    onDragStart = { dragDownTotal = 0f },
+                    onDragEnd = { if (dragDownTotal >= 100f) onCollapse() },
+                    onDragCancel = { dragDownTotal = 0f },
+                ) { change, dragAmount ->
+                    change.consume()
+                    dragDownTotal += dragAmount
+                }
+            },
+    ) {
     // Per-track ambient glow from the album art's dominant color, fading into the
     // theme surface - purely decorative, drawn behind everything else, so it never
     // affects the LocalContentColor propagation Surface above sets up for the text.
@@ -399,10 +421,12 @@ fun FullPlayerScreen(
         SquigglySlider(
             progressFraction = progressFraction,
             onSeek = { fraction -> onSeek((fraction * state.durationMs).toLong()) },
+            onDragFractionChange = { liveDragFraction = it },
             modifier = Modifier.fillMaxWidth(),
         )
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text(formatDuration(state.positionMs), style = MaterialTheme.typography.bodySmall)
+            val shownPositionMs = ((liveDragFraction ?: progressFraction) * state.durationMs).toLong()
+            Text(formatDuration(shownPositionMs), style = MaterialTheme.typography.bodySmall)
             Text(formatDuration(state.durationMs), style = MaterialTheme.typography.bodySmall)
         }
 
@@ -473,6 +497,9 @@ private fun SquigglySlider(
     progressFraction: Float,
     onSeek: (fraction: Float) -> Unit,
     modifier: Modifier = Modifier,
+    // Reports the finger's live position while dragging (null once released/cancelled)
+    // so a caller can show it elsewhere (e.g. the elapsed-time label) as it moves.
+    onDragFractionChange: (Float?) -> Unit = {},
 ) {
     // While the user is actively dragging, show their finger's position instead of
     // the real (laggier) playback position; commit the seek only on release.
@@ -487,12 +514,23 @@ private fun SquigglySlider(
             .height(32.dp)
             .pointerInput(Unit) {
                 detectHorizontalDragGestures(
-                    onDragStart = { offset -> dragFraction = (offset.x / size.width).coerceIn(0f, 1f) },
-                    onDragEnd = { dragFraction?.let(onSeek); dragFraction = null },
-                    onDragCancel = { dragFraction = null },
+                    onDragStart = { offset ->
+                        dragFraction = (offset.x / size.width).coerceIn(0f, 1f)
+                        onDragFractionChange(dragFraction)
+                    },
+                    onDragEnd = {
+                        dragFraction?.let(onSeek)
+                        dragFraction = null
+                        onDragFractionChange(null)
+                    },
+                    onDragCancel = {
+                        dragFraction = null
+                        onDragFractionChange(null)
+                    },
                 ) { change, _ ->
                     change.consume()
                     dragFraction = (change.position.x / size.width).coerceIn(0f, 1f)
+                    onDragFractionChange(dragFraction)
                 }
             }
             .pointerInput(Unit) {

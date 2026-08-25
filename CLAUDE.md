@@ -1,3 +1,7 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
 # MusicDrive
 
 Android music player that streams from Google Drive, functionally similar to
@@ -910,8 +914,69 @@ item - three deferred storage changes the user asked to revisit):
   stored limit untouched; Downloads section correctly shows "No downloads
   yet." on a clean install.
 
+A round of user-requested player/settings/library polish implemented (swipe
+gestures, live seek feedback, an explicit storage-size picker, real artist
+photos, a free-space-aware storage limit, and pull-to-refresh):
+- `ui/PlayerBar.kt`'s `FullPlayerScreen` gained a swipe-down-to-collapse
+  gesture (`detectVerticalDragGestures` over the whole screen, threshold
+  100px, calls the same `onCollapse` the chevron button does) alongside the
+  existing swipe-left/right-to-skip on the cover art - different gesture
+  axes, so both coexist without stealing each other's touches.
+- `SquigglySlider` (the seek bar) gained an `onDragFractionChange` callback
+  reporting the finger's live position while dragging; `FullPlayerScreen`
+  uses it to show the elapsed-time label moving with the drag instead of
+  the laggier real playback position, committing the actual seek only on
+  release (unchanged from before).
+- `ui/SettingsScreen.kt`'s `StorageSizeDialog`: each of the 6 size presets
+  is now also its own tappable label below the slider (bold + tinted when
+  selected) - dragging the slider by feel alone wasn't a clear enough way
+  to land on a specific size.
+- `data/drive/AlbumArtRepository.kt` gained `resolveArtistArt(artistName)`:
+  artist tiles (Artists tab, Home's "Artists you've been playing" row) used
+  to just show the first album's cover, since there's no per-artist artwork
+  concept in a Drive library. Real artist photos now come from the Deezer
+  artist-search API (free, no key - iTunes's `musicArtist` entity, already
+  used for album art/year, doesn't return an artist image at all), disk +
+  memory cached the same way album art is (`filesDir/artist_art/`).
+- Storage limit is now free-space-aware: `MainActivity` reads the device's
+  actual free space via `StatFs(filesDir)` whenever Settings is open (same
+  on-open-only pattern as the existing streaming-cache-usage/art-disk-usage
+  reads), and `StorageSizeDialog` shows "X free on device" plus dims/blocks
+  presets bigger than what currently fits - capped by `freeStorageBytes`
+  alone (not free+already-used), a deliberate simplification the user
+  confirmed rather than accounting for the fact that growing the cache
+  reclaims its own already-used space too. The dialog never silently lowers
+  an existing larger limit just because free space dropped since it was
+  set (`maxFittingIndex` is coerced to at least the current selection).
+- Pull-to-refresh on the album page: `ui/AlbumDetailScreen.kt` wraps its
+  track list in a Material3 `PullToRefreshBox`; swiping down re-fetches
+  the WHOLE library from Drive (reusing the same cost as the existing
+  background refresh on every launch - cheap at personal-library scale)
+  rather than just this one album's folder, so a newly added song shows up
+  library-wide, not just on this screen. `data/LibraryRepository.kt` gained
+  `refreshLibrary(rootFolderId)`, a one-shot live-fetch-+-Room-write
+  extracted out of `loadLibrary()`'s existing live-fetch branch (both now
+  share it - no behavior change to `loadLibrary()` itself). `MainActivity`
+  tracks `currentRootFolderId` (previously a local var inside `loadLibrary`,
+  now hoisted to composable state since the refresh action needs it too)
+  and swaps the currently-open `AlbumDetail` route's album object for the
+  refreshed one (matched by id) so the new track appears immediately
+  without leaving the screen.
+- Verified: all of the above compiles and installs cleanly on the physical
+  Pixel 7, and the app launches with no crash. Live on-device verification
+  of the actual gestures/UI (swipe-down collapse, drag-seek label, storage
+  dialog, artist photos, pull-to-refresh) has NOT been done yet - the
+  Pixel wasn't signed in during this session, which every one of these
+  screens is behind; flagged in Next steps below.
+
 ## Next steps
-1. Android Auto: NOT yet verified against a real/DHU head unit — blocked on
+1. None of the polish batch directly above (swipe-down-to-collapse,
+   live-drag seek label, explicit storage-size labels, Deezer artist
+   photos, free-space-aware storage limit, pull-to-refresh on album page)
+   has been verified live on-device yet - only compiled + installed +
+   launched-with-no-crash. Sign in on the Pixel and exercise each one
+   directly before considering this batch done.
+2. Android Auto: NOT yet verified against a real/DHU head unit — blocked on
    environment, not code. `musicdrive_test` (a `google_apis` AVD, no Play
    Store) ships `com.google.android.projection.gearhead` as a
    non-functional placeholder (`VnLaunchPadActivity` doesn't even exist —
@@ -925,7 +990,7 @@ item - three deferred storage changes the user asked to revisit):
    The Desktop Head Unit tool itself (`extras;google;auto`) IS installed at
    `~/Android/Sdk/extras/google/auto/desktop-head-unit`, ready to go once a
    working Auto app is available to pair it with.
-2. Not yet re-verified on the physical Pixel 7: the second half of the
+3. Not yet re-verified on the physical Pixel 7: the second half of the
    "Player polish batch" above (shuffle/repeat, lyrics/queue repositioning,
    straight seek bar, least-played-first cache eviction) was only verified
    on the `musicdrive_test` emulator — the Pixel dropped off USB mid-session.

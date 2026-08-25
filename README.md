@@ -28,11 +28,15 @@ folder structure your library already uses.
   auto-generated "Liked Songs" playlist, so the app opens on what you
   actually listen to.
 - **Full-text search** across albums, artists, and songs.
-- **Real cover art**, resolved from embedded tags first and an online
-  fallback second, cached locally so it's instant after the first look.
-- **Mini-player and full-screen player** — expand/collapse, swipe to
-  skip, shuffle, 3-state repeat (off/all/one), a dominant-color glow
-  pulled live from the current track's artwork.
+- **Real cover art and artist photos**, resolved from embedded tags first
+  (covers) or a free online lookup (covers and artist portraits alike),
+  cached locally so it's instant after the first look. Slide down on an
+  album page to re-check Drive for a newly added song without leaving
+  the screen.
+- **Mini-player and full-screen player** — swipe down or tap to collapse,
+  swipe left/right on the cover to skip, drag the seek bar with the time
+  label following your finger, shuffle, 3-state repeat (off/all/one), a
+  dominant-color glow pulled live from the current track's artwork.
 - **Queue view** — see and jump to any upcoming or previous track.
 - **Synced, karaoke-style lyrics** — embedded ID3 tags first, [LRCLIB](https://lrclib.net)
   fallback, word-by-word highlighting as the track plays.
@@ -40,9 +44,10 @@ folder structure your library already uses.
 - **One combined storage limit** in Settings, shared by the streaming cache
   and your explicit per-album downloads. Downloads are never auto-deleted —
   the streaming cache just uses whatever room is left, evicting your
-  least-played tracks first. Settings shows exactly what's using space
-  (downloads, streaming cache, album art) and lets you remove downloads
-  individually or all at once.
+  least-played tracks first. The size picker shows your device's actual
+  free space and won't offer a limit bigger than what fits. Settings shows
+  exactly what's using space (downloads, streaming cache, album art) and
+  lets you remove downloads individually or all at once.
 - **Survives everything** — background playback with a media notification,
   gapless transitions between an album's tracks, and correct recovery even
   if Android kills the app process mid-song.
