@@ -39,8 +39,8 @@ folder structure your library already uses.
   label following your finger, shuffle, 3-state repeat (off/all/one), a
   dominant-color glow pulled live from the current track's artwork.
 - **Queue view** — see and jump to any upcoming or previous track.
-- **Synced, karaoke-style lyrics** — embedded ID3 tags first, [LRCLIB](https://lrclib.net)
-  fallback, word-by-word highlighting as the track plays.
+- **Synced lyrics** — embedded ID3 tags first, [LRCLIB](https://lrclib.net)
+  fallback, with the current line highlighted as the track plays.
 - **"Your Stats"** — a Wrapped-style recap of your top songs and artists.
 - **One combined storage limit** in Settings, shared by the streaming cache
   and your explicit per-album downloads. Downloads are never auto-deleted —
@@ -64,6 +64,10 @@ pending head-unit testing).
   your chosen root for the first folder(s) that directly contain audio files
   — so both `root/Album` and `root/Artist/Album` layouts work. Cached in
   Room so relaunching browses instantly, refreshing quietly in the background.
+  Album and artist names shown in the app come from embedded tags first,
+  falling back to the folder name only when a track has no tag (or the tag
+  looks corrupted) — folder structure still decides which tracks make up an
+  album, tags just correct how its name and artist are displayed.
 - **Playback**: Media3/ExoPlayer with two separate caches under one
   user-configurable combined size limit — an auto-managed streaming cache
   (least-played-first eviction) and a permanent cache for explicit
@@ -75,10 +79,8 @@ pending head-unit testing).
   `AuthorizationClient` for the separate Drive `drive.readonly` scope
   consent.
 - **Lyrics**: embedded ID3 tags first, then LRCLIB's line-synced lyrics
-  when available (word-by-word karaoke highlighting is synthesized by
-  evenly distributing each line's words across its own timespan, since
-  LRCLIB doesn't provide true per-word timing), falling back to plain
-  static text when nothing's synced.
+  when available (the current line is bolded and tinted as it plays),
+  falling back to plain static text when nothing's synced.
 
 For full architecture notes, environment setup, and the detailed
 development log, see [CLAUDE.md](CLAUDE.md).

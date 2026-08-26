@@ -11,8 +11,9 @@ import androidx.room.RoomDatabase
         PlayCountEntity::class,
         AlbumYearEntity::class,
         TrackOrderEntity::class,
+        AlbumTagsEntity::class,
     ],
-    version = 6,
+    version = 7,
     exportSchema = false,
 )
 abstract class MusicDriveDatabase : RoomDatabase() {
@@ -21,4 +22,5 @@ abstract class MusicDriveDatabase : RoomDatabase() {
     abstract fun playCountDao(): PlayCountDao
     abstract fun albumYearDao(): AlbumYearDao
     abstract fun trackOrderDao(): TrackOrderDao
+    abstract fun albumTagsDao(): AlbumTagsDao
 }

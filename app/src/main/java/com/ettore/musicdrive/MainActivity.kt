@@ -147,7 +147,13 @@ class MainActivity : ComponentActivity() {
         tokenProvider.setAuthorizer(driveAuthorizationManager)
         driveRepository = DriveRepository(tokenProvider)
         libraryRepository = LibraryRepository(driveRepository, app.database.libraryDao())
-        albumArtRepository = AlbumArtRepository(this, tokenProvider, app.database.albumYearDao(), app.database.trackOrderDao())
+        albumArtRepository = AlbumArtRepository(
+            this,
+            tokenProvider,
+            app.database.albumYearDao(),
+            app.database.trackOrderDao(),
+            app.database.albumTagsDao(),
+        )
         settingsRepository = app.settingsRepository
         lyricsRepository = LyricsRepository(app.database.lyricsDao())
         downloadTracker = app.downloadTracker
@@ -459,6 +465,32 @@ private fun MusicDriveApp(
         }
     }
     val yearOf: (DriveAlbum) -> Int? = { albumYears[it.id] }
+
+    // Embedded ID3 tags (TALB/TPE2/TPE1), when present, correct the Drive-folder-derived
+    // name/artistHint (see AlbumArtRepository.resolveDisplayTags) - resolved eagerly for the
+    // whole library, same pattern and same bounded-concurrency reasoning as year resolution
+    // above, since the corrected name/artist feeds grouping/sorting/search immediately, not
+    // just one open screen. tagsResolvedIds (not the album objects themselves) tracks which
+    // albums have already been probed, since a successful correction replaces the album object
+    // in `state` - there's no other stable "already resolved" signal to check against.
+    var tagsResolvedIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    val tagsResolveSemaphore = remember { Semaphore(3) }
+    LaunchedEffect(loadedAlbums) {
+        loadedAlbums.forEach { album ->
+            if (album.id !in tagsResolvedIds) {
+                launch {
+                    tagsResolveSemaphore.withPermit {
+                        val resolved = albumArtRepository.resolveDisplayTags(album)
+                        tagsResolvedIds = tagsResolvedIds + album.id
+                        if (resolved.name != album.name || resolved.artistHint != album.artistHint) {
+                            val current = state as? AppState.LibraryLoaded ?: return@withPermit
+                            state = current.copy(albums = current.albums.map { if (it.id == resolved.id) resolved else it })
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     // Real track order (see AlbumArtRepository.resolveTrackOrder) is resolved lazily per album,
     // only for whichever album is currently open - unlike year resolution above, doing this

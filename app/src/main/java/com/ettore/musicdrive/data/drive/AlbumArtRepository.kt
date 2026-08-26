@@ -3,6 +3,8 @@ package com.ettore.musicdrive.data.drive
 import android.content.Context
 import android.media.MediaMetadataRetriever
 import com.ettore.musicdrive.auth.DriveTokenProvider
+import com.ettore.musicdrive.data.local.room.AlbumTagsDao
+import com.ettore.musicdrive.data.local.room.AlbumTagsEntity
 import com.ettore.musicdrive.data.local.room.AlbumYearDao
 import com.ettore.musicdrive.data.local.room.AlbumYearEntity
 import com.ettore.musicdrive.data.local.room.TrackOrderDao
@@ -43,12 +45,14 @@ class AlbumArtRepository(
     private val tokenProvider: DriveTokenProvider,
     private val yearDao: AlbumYearDao,
     private val trackOrderDao: TrackOrderDao,
+    private val tagsDao: AlbumTagsDao,
 ) {
     private val diskCacheDir = File(context.filesDir, "album_art").apply { mkdirs() }
     private val artistArtDiskCacheDir = File(context.filesDir, "artist_art").apply { mkdirs() }
     private val artMemoryCache = mutableMapOf<String, File?>()
     private val artistArtMemoryCache = mutableMapOf<String, File?>()
     private val yearMemoryCache = mutableMapOf<String, Int?>()
+    private val tagsMemoryCache = mutableMapOf<String, AlbumTags>()
 
     /**
      * Total disk space used by cached album art - shown as an info line in Settings. Not
@@ -202,6 +206,73 @@ class AlbumArtRepository(
             compareBy({ numbers[it.id] ?: Int.MAX_VALUE }, { originalIndex.getValue(it.id) }),
         )
         album.copy(tracks = orderedTracks)
+    }
+
+    private data class AlbumTags(val albumName: String?, val artistName: String?)
+
+    /**
+     * Embedded TALB (album) and TPE2/TPE1 (album artist, falling back to track artist) tags for
+     * an album's first track, when present, override the Drive-folder-derived [DriveAlbum.name]/
+     * [DriveAlbum.artistHint] DriveRepository assigns by default - a folder name is sometimes
+     * abbreviated, mistyped, or differently cased than the actual tagged metadata (e.g. a folder
+     * literally named "u2" vs. the tag "U2"), and the tag is the more authoritative source when
+     * present. This only ever corrects those two DISPLAY fields; folder structure still decides
+     * ALBUM GROUPING (which tracks belong together) - that boundary logic in DriveRepository is
+     * unrelated and untouched. An album with no embedded tags keeps its folder-derived
+     * name/artistHint unchanged. Every result - including "no tag found" - is cached in Room per
+     * album, so this only ever costs one retriever probe per album, not per app launch.
+     */
+    suspend fun resolveDisplayTags(album: DriveAlbum): DriveAlbum = withContext(Dispatchers.IO) {
+        tagsMemoryCache[album.id]?.let { return@withContext applyTags(album, it) }
+
+        tagsDao.get(album.id)?.let { entity ->
+            val tags = AlbumTags(entity.tagAlbumName, entity.tagArtistName)
+            tagsMemoryCache[album.id] = tags
+            return@withContext applyTags(album, tags)
+        }
+
+        val tags = extractEmbeddedAlbumTags(album)
+        tagsDao.upsert(AlbumTagsEntity(album.id, tags.albumName, tags.artistName))
+        tagsMemoryCache[album.id] = tags
+        applyTags(album, tags)
+    }
+
+    private fun applyTags(album: DriveAlbum, tags: AlbumTags): DriveAlbum = album.copy(
+        name = tags.albumName ?: album.name,
+        artistHint = tags.artistName ?: album.artistHint,
+    )
+
+    private suspend fun extractEmbeddedAlbumTags(album: DriveAlbum): AlbumTags {
+        val retriever = openRetriever(album) ?: return AlbumTags(null, null)
+        return try {
+            val albumName = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUM)
+                ?.trim()?.takeIf(::isPlausibleTagValue)
+            val artistName = (
+                retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUMARTIST)
+                    ?: retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST)
+                )?.trim()?.takeIf(::isPlausibleTagValue)
+            AlbumTags(albumName, artistName)
+        } catch (e: Exception) {
+            AlbumTags(null, null)
+        } finally {
+            retriever.release()
+        }
+    }
+
+    /**
+     * Rejects a tag value that's almost certainly mis-decoded binary rather than real text -
+     * found live: some tracks' embedded ARTIST frame (Kanye West's "Vultures" albums, in our
+     * test library) decodes to 1-2 character symbol garbage ("Ľ$", "¥$") instead of the real
+     * artist name, which would otherwise silently clobber a correct folder-derived artistHint
+     * with garbage. Real artist/album names, in any script, are overwhelmingly
+     * letters/digits/spaces/punctuation; a short value that isn't ALL letters/digits, or a
+     * longer value that isn't MOSTLY letters/digits, gets treated the same as "no tag found"
+     * (folder-derived name/artistHint stands).
+     */
+    private fun isPlausibleTagValue(value: String): Boolean {
+        if (value.isBlank() || '�' in value) return false
+        val letterOrDigitRatio = value.count { it.isLetterOrDigit() }.toFloat() / value.length
+        return if (value.length <= 3) letterOrDigitRatio == 1f else letterOrDigitRatio >= 0.5f
     }
 
     private suspend fun extractEmbeddedTrackNumber(track: DriveAudioFile): Int? {

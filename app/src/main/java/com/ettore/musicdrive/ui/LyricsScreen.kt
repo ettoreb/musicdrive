@@ -1,9 +1,7 @@
 package com.ettore.musicdrive.ui
 
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -45,28 +43,27 @@ private data class LyricsState(
     val syncedLines: List<LyricLine> = emptyList(),
 )
 
-/** One LRC-synced lyric line: when it starts, and its words (for the karaoke wipe). */
-private data class LyricLine(val startMs: Long, val words: List<String>)
+/** One LRC-synced lyric line: when it starts, and its text. */
+private data class LyricLine(val startMs: Long, val text: String)
 
 private val lrcTagPattern = Regex("""^\[(\d{1,2}):(\d{1,2}(?:[.:]\d{1,3})?)](.*)$""")
 
 /**
- * Parses LRCLIB's line-synced LRC text (`[mm:ss.xx]line text`) into timed
- * lines. LRCLIB doesn't provide word-level timing (only a handful of
- * "enhanced LRC" sources do), so word-by-word highlighting below is
- * synthesized by evenly distributing each line's words across its own
- * timespan (this line's start to the next line's start) rather than from
- * real per-word timestamps - the same trick Metrolist uses for plain
- * line-synced sources, and the only option LRCLIB's data supports.
+ * Parses LRCLIB's line-synced LRC text (`[mm:ss.xx]line text`) into timed lines - used to pick
+ * which whole line is active and to drive auto-scroll. A prior version also synthesized
+ * word-by-word highlighting by evenly distributing each line's words across its own timespan
+ * (LRCLIB only has line-level timing, not real per-word timestamps) - reverted after it visibly
+ * drifted out of sync with the actual vocals; line-level highlighting alone doesn't overclaim
+ * precision the source data doesn't have.
  */
 private fun parseLrc(lrc: String): List<LyricLine> = lrc.lineSequence()
     .mapNotNull { raw ->
         val match = lrcTagPattern.matchEntire(raw.trim()) ?: return@mapNotNull null
         val minutes = match.groupValues[1].toLongOrNull() ?: return@mapNotNull null
         val seconds = match.groupValues[2].replace(':', '.').toDoubleOrNull() ?: return@mapNotNull null
-        val words = match.groupValues[3].trim().split(Regex("\\s+")).filter { it.isNotBlank() }
-        if (words.isEmpty()) return@mapNotNull null
-        LyricLine(startMs = minutes * 60_000L + (seconds * 1000).toLong(), words = words)
+        val text = match.groupValues[3].trim()
+        if (text.isBlank()) return@mapNotNull null
+        LyricLine(startMs = minutes * 60_000L + (seconds * 1000).toLong(), text = text)
     }
     .sortedBy { it.startMs }
     .toList()
@@ -78,18 +75,6 @@ private fun activeLineIndex(lines: List<LyricLine>, positionMs: Long): Int {
         if (lines[i].startMs <= positionMs) index = i else break
     }
     return index
-}
-
-/** Fraction (0f-1f) of the active line's own timespan that's elapsed - drives the word wipe. */
-private fun activeLineProgress(lines: List<LyricLine>, activeIndex: Int, positionMs: Long, trackDurationMs: Long): Float {
-    if (activeIndex < 0) return 0f
-    val line = lines[activeIndex]
-    val nextStart = lines.getOrNull(activeIndex + 1)?.startMs
-        ?: trackDurationMs.takeIf { it > line.startMs }
-        ?: (line.startMs + 4_000L)
-    val duration = (nextStart - line.startMs).coerceAtLeast(1L)
-    val elapsed = (positionMs - line.startMs).coerceIn(0L, duration)
-    return elapsed.toFloat() / duration
 }
 
 /**
@@ -199,26 +184,6 @@ private fun rememberLyricsState(
     return state
 }
 
-/**
- * Polls the controller's live position at a finer grain than the shared
- * player-bar state (which updates every 500ms - fine for a seek bar, too
- * coarse for a smooth word wipe). Stops polling while paused so this screen
- * doesn't burn battery ticking a position that isn't moving.
- */
-@Composable
-private fun rememberLiveLyricsPositionMs(controller: MediaController?, isPlaying: Boolean): Long {
-    var positionMs by remember { mutableStateOf(0L) }
-    LaunchedEffect(controller, isPlaying) {
-        if (controller == null) return@LaunchedEffect
-        while (true) {
-            positionMs = controller.currentPosition.coerceAtLeast(0)
-            if (!isPlaying) break
-            delay(80)
-        }
-    }
-    return positionMs
-}
-
 @Composable
 @UnstableApi
 fun LyricsScreen(
@@ -229,7 +194,6 @@ fun LyricsScreen(
     modifier: Modifier = Modifier,
 ) {
     val state = rememberLyricsState(controller, playerState, lyricsRepository)
-    val positionMs = rememberLiveLyricsPositionMs(controller, playerState.isPlaying)
 
     // Surface (not a plain .background() modifier) so it propagates the correct text
     // color to every un-colored Text below via LocalContentColor - a bare background()
@@ -256,8 +220,7 @@ fun LyricsScreen(
                     )
                     state.syncedLines.isNotEmpty() -> SyncedLyricsView(
                         lines = state.syncedLines,
-                        positionMs = positionMs,
-                        trackDurationMs = playerState.durationMs,
+                        positionMs = playerState.positionMs,
                         modifier = Modifier.fillMaxSize(),
                     )
                     else -> Text(
@@ -275,9 +238,8 @@ fun LyricsScreen(
 }
 
 @Composable
-private fun SyncedLyricsView(lines: List<LyricLine>, positionMs: Long, trackDurationMs: Long, modifier: Modifier = Modifier) {
+private fun SyncedLyricsView(lines: List<LyricLine>, positionMs: Long, modifier: Modifier = Modifier) {
     val activeIndex = remember(lines, positionMs) { activeLineIndex(lines, positionMs) }
-    val progress = remember(lines, positionMs) { activeLineProgress(lines, activeIndex, positionMs, trackDurationMs) }
     val listState = rememberLazyListState()
 
     // Keeps a couple of already-sung lines visible above the active one, like a
@@ -295,30 +257,12 @@ private fun SyncedLyricsView(lines: List<LyricLine>, positionMs: Long, trackDura
     ) {
         itemsIndexed(lines, key = { index, _ -> index }) { index, line ->
             val isActive = index == activeIndex
-            val highlightedCount = if (isActive) (progress * line.words.size).toInt().coerceIn(0, line.words.size) else 0
-
-            if (isActive) {
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    line.words.forEachIndexed { wordIndex, word ->
-                        Text(
-                            word,
-                            style = MaterialTheme.typography.headlineSmall,
-                            fontWeight = FontWeight.Bold,
-                            color = if (wordIndex < highlightedCount) {
-                                MaterialTheme.colorScheme.primary
-                            } else {
-                                MaterialTheme.colorScheme.onSurface
-                            },
-                        )
-                    }
-                }
-            } else {
-                Text(
-                    line.words.joinToString(" "),
-                    style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
+            Text(
+                line.text,
+                style = if (isActive) MaterialTheme.typography.headlineSmall else MaterialTheme.typography.titleMedium,
+                fontWeight = if (isActive) FontWeight.Bold else FontWeight.Normal,
+                color = if (isActive) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
             Spacer(Modifier.height(16.dp))
         }
     }
