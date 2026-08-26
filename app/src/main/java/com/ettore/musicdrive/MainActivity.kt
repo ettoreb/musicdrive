@@ -47,6 +47,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -235,6 +236,15 @@ private fun LibraryRoute.bottomTab(): BottomTab = when (this) {
     is LibraryRoute.Library, is LibraryRoute.ArtistAlbums, is LibraryRoute.AlbumDetail -> BottomTab.LIBRARY
 }
 
+/** Stable per-screen identity for [rememberSaveableStateHolder] - see its call site for why. */
+private fun LibraryRoute.stateKey(): String = when (this) {
+    is LibraryRoute.Home -> "home"
+    is LibraryRoute.Library -> "library"
+    is LibraryRoute.Settings -> "settings"
+    is LibraryRoute.ArtistAlbums -> "artist:${artist.name}"
+    is LibraryRoute.AlbumDetail -> "album:${album.id}"
+}
+
 private const val HOME_GRID_LIMIT = 12
 
 @Composable
@@ -264,6 +274,17 @@ private fun MusicDriveApp(
     var isRefreshingAlbum by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
+
+    // This app hand-rolls routing with a plain `when (route)` instead of a navigation library,
+    // which means a branch's own remembered state (a grid's scroll position, above all) is torn
+    // down the moment you leave it and rebuilt from scratch when you come back - found live:
+    // scroll deep into the Albums grid, open an album, play a track, collapse the player, back
+    // out, and the grid had reset to the top. A SaveableStateHolder keyed per logical
+    // screen (LibraryRoute.stateKey(), plus the Library route's own Artists/Albums sub-tab)
+    // is the standard Compose fix for exactly this - it keeps each screen's saveable state
+    // (LazyGridState/LazyListState both have a built-in Saver) in a map that outlives the
+    // branch being torn down, since the holder itself lives here, above the `when`.
+    val routeStateHolder = rememberSaveableStateHolder()
 
     fun selectBottomTab(tab: BottomTab) {
         libraryRoute = when (tab) {
@@ -581,7 +602,10 @@ private fun MusicDriveApp(
                             onFolderSelected = ::onFolderSelected,
                         )
 
-                        is AppState.LibraryLoaded -> when (val route = libraryRoute) {
+                        is AppState.LibraryLoaded -> {
+                        val route = libraryRoute
+                        routeStateHolder.SaveableStateProvider(route.stateKey()) {
+                        when (route) {
                             is LibraryRoute.Home -> Column(modifier = Modifier.fillMaxSize()) {
                                 HomeScreen(
                                     topTracks = homeItems,
@@ -621,6 +645,10 @@ private fun MusicDriveApp(
                                         label = { Text("Albums") },
                                     )
                                 }
+                                // Nested under the same routeStateHolder used above - the Artists/Albums
+                                // toggle is a `when` branch switch just like the outer route one, so its
+                                // grids need the same fix to keep their own scroll position independently.
+                                routeStateHolder.SaveableStateProvider("library:$libraryViewMode") {
                                 when (libraryViewMode) {
                                     LibraryViewMode.ARTISTS -> ArtistListScreen(
                                         artists = current.albums.groupByArtist(),
@@ -652,6 +680,7 @@ private fun MusicDriveApp(
                                             modifier = Modifier.weight(1f),
                                         )
                                     }
+                                }
                                 }
                             }
 
@@ -705,6 +734,8 @@ private fun MusicDriveApp(
                                 onDownloadAlbum = { downloadTracker.downloadAlbum(route.album) },
                                 onRemoveAlbumDownload = { downloadTracker.removeAlbum(route.album) },
                             )
+                        }
+                        }
                         }
                     }
                 }
