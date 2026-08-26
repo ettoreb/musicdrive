@@ -11,7 +11,10 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -39,7 +42,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.media3.exoplayer.offline.Download
 import com.ettore.musicdrive.data.drive.DriveAlbum
-import com.ettore.musicdrive.data.local.AlbumSortMode
 import com.ettore.musicdrive.data.local.ThemeMode
 import kotlin.math.roundToInt
 
@@ -58,13 +60,6 @@ private val themeModeOptions = listOf(
     "Dark" to ThemeMode.DARK,
 )
 
-private val albumSortOptions = listOf(
-    "Release year (newest first)" to AlbumSortMode.YEAR,
-    "Name (A–Z)" to AlbumSortMode.NAME,
-    "Track count" to AlbumSortMode.TRACK_COUNT,
-    "Artist name (A–Z)" to AlbumSortMode.ARTIST_NAME,
-)
-
 @Composable
 fun SettingsScreen(
     libraryFolderLabel: String,
@@ -80,13 +75,12 @@ fun SettingsScreen(
     onRemoveAllDownloads: () -> Unit,
     themeMode: ThemeMode,
     onThemeModeChange: (ThemeMode) -> Unit,
-    defaultAlbumSortMode: AlbumSortMode,
-    onDefaultAlbumSortModeChange: (AlbumSortMode) -> Unit,
     onOpenStats: () -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var showStorageDialog by remember { mutableStateOf(false) }
+    var showDownloadsDialog by remember { mutableStateOf(false) }
     val downloadsUsageBytes = remember(downloads) { downloads.values.sumOf { it.bytesDownloaded } }
     val downloadGroups = remember(downloads, albums) { groupDownloadsByAlbum(downloads, albums) }
 
@@ -149,35 +143,16 @@ fun SettingsScreen(
                     SettingsRadioRow(label = label, selected = mode == themeMode, onClick = { onThemeModeChange(mode) })
                 }
 
-                SettingsSectionTitle("Default album sort")
-                albumSortOptions.forEach { (label, mode) ->
-                    SettingsRadioRow(
-                        label = label,
-                        selected = mode == defaultAlbumSortMode,
-                        onClick = { onDefaultAlbumSortModeChange(mode) },
-                    )
-                }
-
                 SettingsSectionTitle("Downloads")
-                if (downloadGroups.isEmpty()) {
-                    Text(
-                        "No downloads yet.",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(bottom = 8.dp),
-                    )
-                } else {
-                    downloadGroups.forEach { group ->
-                        DownloadRow(
-                            title = group.album?.name ?: "Other downloads (${group.trackIds.size})",
-                            sizeBytes = group.sizeBytes,
-                            onRemove = group.album?.let { album -> { onRemoveDownloadedAlbum(album) } },
-                        )
-                    }
-                    TextButton(onClick = onRemoveAllDownloads, modifier = Modifier.padding(top = 4.dp)) {
-                        Text("Remove all downloads")
-                    }
-                }
+                SettingsActionRow(
+                    label = if (downloadGroups.isEmpty()) {
+                        "No downloads yet"
+                    } else {
+                        val albumWord = if (downloadGroups.size == 1) "album" else "albums"
+                        "${downloadGroups.size} $albumWord · ${formatBytes(downloadsUsageBytes)}"
+                    },
+                    onClick = { showDownloadsDialog = true },
+                )
 
                 SettingsSectionTitle("Stats")
                 SettingsActionRow(label = "Your Stats (most-played songs & artists)", onClick = onOpenStats)
@@ -193,6 +168,15 @@ fun SettingsScreen(
             freeStorageBytes = freeStorageBytes,
             onConfirm = { bytes -> onCacheLimitChange(bytes); showStorageDialog = false },
             onDismiss = { showStorageDialog = false },
+        )
+    }
+
+    if (showDownloadsDialog) {
+        DownloadsDialog(
+            downloadGroups = downloadGroups,
+            onRemoveDownloadedAlbum = onRemoveDownloadedAlbum,
+            onRemoveAllDownloads = onRemoveAllDownloads,
+            onDismiss = { showDownloadsDialog = false },
         )
     }
 }
@@ -258,6 +242,49 @@ private fun DownloadRow(title: String, sizeBytes: Long, onRemove: (() -> Unit)?)
         if (onRemove != null) {
             IconButton(onClick = onRemove) {
                 Icon(Icons.Filled.Delete, contentDescription = "Remove $title")
+            }
+        }
+    }
+}
+
+/** Same Dialog+Surface pattern as StorageSizeDialog - the inline per-album list used to live
+ * directly in Settings, but a large library's whole download list made the Settings page itself
+ * unnecessarily long; a popup keeps Settings a flat list of rows while still surfacing every
+ * album's size and its own remove action. */
+@Composable
+private fun DownloadsDialog(
+    downloadGroups: List<DownloadGroup>,
+    onRemoveDownloadedAlbum: (DriveAlbum) -> Unit,
+    onRemoveAllDownloads: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    Dialog(onDismissRequest = onDismiss) {
+        Surface(shape = RoundedCornerShape(16.dp), color = MaterialTheme.colorScheme.surface) {
+            Column(modifier = Modifier.padding(24.dp).heightIn(max = 480.dp)) {
+                Text("Downloads", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(bottom = 8.dp))
+                if (downloadGroups.isEmpty()) {
+                    Text(
+                        "No downloads yet.",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                } else {
+                    LazyColumn(modifier = Modifier.weight(1f, fill = false)) {
+                        items(downloadGroups, key = { it.album?.id ?: it.trackIds.joinToString() }) { group ->
+                            DownloadRow(
+                                title = group.album?.name ?: "Other downloads (${group.trackIds.size})",
+                                sizeBytes = group.sizeBytes,
+                                onRemove = group.album?.let { album -> { onRemoveDownloadedAlbum(album) } },
+                            )
+                        }
+                    }
+                    TextButton(onClick = onRemoveAllDownloads, modifier = Modifier.padding(top = 4.dp)) {
+                        Text("Remove all downloads")
+                    }
+                }
+                Row(modifier = Modifier.fillMaxWidth().padding(top = 8.dp), horizontalArrangement = Arrangement.End) {
+                    TextButton(onClick = onDismiss) { Text("Close") }
+                }
             }
         }
     }

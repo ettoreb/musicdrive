@@ -27,7 +27,8 @@ folder structure your library already uses.
 - **Home dashboard** — your most-played songs and artists, plus an
   auto-generated "Liked Songs" playlist, so the app opens on what you
   actually listen to.
-- **Full-text search** across albums, artists, and songs.
+- **Full-text search** across albums, artists, and songs, right from the
+  Home screen — no separate search tab to switch to.
 - **Real cover art and artist photos**, resolved from embedded tags first
   (covers) or a free online lookup (covers and artist portraits alike),
   cached locally so it's instant after the first look. Slide down on an
@@ -46,8 +47,9 @@ folder structure your library already uses.
   the streaming cache just uses whatever room is left, evicting your
   least-played tracks first. The size picker shows your device's actual
   free space and won't offer a limit bigger than what fits. Settings shows
-  exactly what's using space (downloads, streaming cache, album art) and
-  lets you remove downloads individually or all at once.
+  exactly what's using space (downloads, streaming cache, album art); a
+  Downloads popup lists every downloaded album with per-album and
+  remove-all actions.
 - **Survives everything** — background playback with a media notification,
   gapless transitions between an album's tracks, and correct recovery even
   if Android kills the app process mid-song.

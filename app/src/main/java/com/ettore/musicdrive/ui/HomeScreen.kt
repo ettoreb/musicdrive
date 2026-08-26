@@ -11,9 +11,12 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.GridItemSpan
@@ -23,9 +26,16 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.MusicNote
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -41,8 +51,10 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
+import com.ettore.musicdrive.data.TrackMatch
 import com.ettore.musicdrive.data.drive.DriveAlbum
 import com.ettore.musicdrive.data.drive.DriveAudioFile
+import com.ettore.musicdrive.data.searchLibrary
 
 /** One most-played-songs grid tile: the track itself, plus which album/index to resume playback from. */
 data class HomeGridItem(val album: DriveAlbum, val track: DriveAudioFile, val trackIndex: Int, val playCount: Int)
@@ -50,6 +62,19 @@ data class HomeGridItem(val album: DriveAlbum, val track: DriveAudioFile, val tr
 /** One most-played-artist tile. */
 data class TopArtistItem(val artist: ArtistSummary, val playCount: Int)
 
+/**
+ * Home shows a tappable, search-bar-styled row as the first item in its grid, so it scrolls away
+ * naturally with the rest of the feed like any other list header (a real M3 [SearchBar] pinned
+ * above the grid via an outer Box was tried first - found live: (1) it stayed fixed instead of
+ * scrolling with content, which is what this row fixes, and (2) worse, M3's SearchBar crashes
+ * with `IllegalArgumentException: Can't represent a width of ... and height of 2366967 in
+ * Constraints` if its *expanded* state is ever measured inside a lazy list/grid item - it needs
+ * genuinely bounded (screen-sized) constraints, which a scrolling container's item slot doesn't
+ * give it. Tapping this row instead opens [SearchOverlayScreen] as a full-screen overlay from
+ * `MainActivity`, the same proven-safe pattern already used for Queue/Lyrics/Stats - not a
+ * separate route/tab; it used to be its own bottom-nav destination (ui/SearchScreen.kt), moved
+ * here to match every mainstream music app's layout (search lives on/above the home feed).
+ */
 @Composable
 fun HomeScreen(
     topTracks: List<HomeGridItem>,
@@ -58,22 +83,11 @@ fun HomeScreen(
     onTrackClick: (HomeGridItem) -> Unit,
     onArtistClick: (ArtistSummary) -> Unit,
     onLikedSongsClick: () -> Unit,
+    onOpenSearch: () -> Unit,
     resolveArt: suspend (DriveAlbum) -> Any?,
     resolveArtistArt: suspend (String) -> Any?,
     modifier: Modifier = Modifier,
 ) {
-    if (topTracks.isEmpty()) {
-        Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text(
-                "Play some songs and your most-played tracks will show up here.",
-                style = MaterialTheme.typography.bodyLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(24.dp),
-            )
-        }
-        return
-    }
-
     LazyVerticalGrid(
         columns = GridCells.Adaptive(minSize = GRID_TILE_MIN_SIZE),
         modifier = modifier.fillMaxSize(),
@@ -82,24 +96,160 @@ fun HomeScreen(
         verticalArrangement = Arrangement.spacedBy(GRID_SPACING),
     ) {
         item(span = { GridItemSpan(maxLineSpan) }) {
-            LikedSongsCard(count = likedSongsCount, onClick = onLikedSongsClick)
+            HomeSearchEntryRow(onClick = onOpenSearch)
         }
 
-        item(span = { GridItemSpan(maxLineSpan) }) {
+        if (topTracks.isEmpty()) {
+            item(span = { GridItemSpan(maxLineSpan) }) {
+                Box(
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 48.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        "Play some songs and your most-played tracks will show up here.",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(24.dp),
+                    )
+                }
+            }
+        } else {
+            item(span = { GridItemSpan(maxLineSpan) }) {
+                LikedSongsCard(count = likedSongsCount, onClick = onLikedSongsClick)
+            }
+
+            item(span = { GridItemSpan(maxLineSpan) }) {
+                Text(
+                    "Most played",
+                    style = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.padding(top = 8.dp, bottom = 4.dp),
+                )
+            }
+
+            items(topTracks, key = { it.track.id }) { item ->
+                HomeGridTile(item = item, onClick = { onTrackClick(item) }, resolveArt = resolveArt)
+            }
+
+            if (topArtists.isNotEmpty()) {
+                item(span = { GridItemSpan(maxLineSpan) }) {
+                    TopArtistsRow(artists = topArtists, onArtistClick = onArtistClick, resolveArtistArt = resolveArtistArt)
+                }
+            }
+        }
+    }
+}
+
+/** Visually matches M3's SearchBar collapsed appearance (same default container color/shape/
+ * height) without being one - see the [HomeScreen] doc for why a real SearchBar can't live here. */
+@Composable
+private fun HomeSearchEntryRow(onClick: () -> Unit) {
+    Surface(
+        onClick = onClick,
+        modifier = Modifier.fillMaxWidth().height(56.dp),
+        shape = RoundedCornerShape(28.dp),
+        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+    ) {
+        Row(
+            modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(Icons.Filled.Search, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
             Text(
-                "Most played",
-                style = MaterialTheme.typography.titleMedium,
-                modifier = Modifier.padding(top = 8.dp, bottom = 4.dp),
+                "Search albums, artists, songs",
+                style = MaterialTheme.typography.bodyLarge,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(start = 16.dp),
             )
         }
+    }
+}
 
-        items(topTracks, key = { it.track.id }) { item ->
-            HomeGridTile(item = item, onClick = { onTrackClick(item) }, resolveArt = resolveArt)
-        }
+/**
+ * Full-screen search overlay opened from [HomeSearchEntryRow] - rendered by `MainActivity`
+ * alongside its other overlays (Queue/Lyrics/Stats), with a `BackHandler` there too (same
+ * pattern as those). A plain `OutlinedTextField` rather than M3's `SearchBar`: this composable
+ * already IS the full-screen "expanded" surface, so there's no separate collapsed state to
+ * animate between - see the [HomeScreen] doc for the crash that ruled out `SearchBar` for this
+ * app's layout entirely, not just the collapsed/inline spot.
+ */
+@Composable
+fun SearchOverlayScreen(
+    albums: List<DriveAlbum>,
+    onAlbumClick: (DriveAlbum) -> Unit,
+    onTrackClick: (album: DriveAlbum, index: Int) -> Unit,
+    onBack: () -> Unit,
+    resolveArt: suspend (DriveAlbum) -> Any?,
+    modifier: Modifier = Modifier,
+) {
+    var query by remember { mutableStateOf("") }
+    val results = remember(query, albums) { albums.searchLibrary(query) }
 
-        if (topArtists.isNotEmpty()) {
-            item(span = { GridItemSpan(maxLineSpan) }) {
-                TopArtistsRow(artists = topArtists, onArtistClick = onArtistClick, resolveArtistArt = resolveArtistArt)
+    Surface(modifier = modifier.fillMaxSize(), color = MaterialTheme.colorScheme.surface) {
+        Column(modifier = Modifier.fillMaxSize().statusBarsPadding()) {
+            Row(modifier = Modifier.fillMaxWidth().padding(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                IconButton(onClick = onBack) {
+                    Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Close search")
+                }
+                OutlinedTextField(
+                    value = query,
+                    onValueChange = { query = it },
+                    placeholder = { Text("Search albums, artists, songs") },
+                    singleLine = true,
+                    trailingIcon = if (query.isNotEmpty()) {
+                        { IconButton(onClick = { query = "" }) { Icon(Icons.Filled.Close, contentDescription = "Clear") } }
+                    } else null,
+                    modifier = Modifier.weight(1f).padding(start = 4.dp),
+                )
+            }
+
+            when {
+                query.isBlank() -> Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text(
+                        "Search your library by song, album, or artist name.",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(24.dp),
+                    )
+                }
+                results.albums.isEmpty() && results.tracks.isEmpty() -> Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text(
+                        "No results for \"$query\"",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(24.dp),
+                    )
+                }
+                else -> LazyColumn(modifier = Modifier.fillMaxSize()) {
+                    if (results.albums.isNotEmpty()) {
+                        item {
+                            Text(
+                                "Albums",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                            )
+                        }
+                        items(results.albums, key = { "album-${it.id}" }) { album ->
+                            AlbumResultRow(album = album, onClick = { onAlbumClick(album) }, resolveArt = resolveArt)
+                        }
+                    }
+                    if (results.tracks.isNotEmpty()) {
+                        item {
+                            Text(
+                                "Songs",
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                            )
+                        }
+                        items(results.tracks, key = { "track-${it.track.id}" }) { match ->
+                            TrackResultRow(match = match, onClick = { onTrackClick(match.album, match.index) })
+                        }
+                    }
+                }
             }
         }
     }
@@ -246,5 +396,86 @@ private fun HomeGridTile(item: HomeGridItem, onClick: () -> Unit, resolveArt: su
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
+    }
+}
+
+@Composable
+private fun AlbumResultRow(album: DriveAlbum, onClick: () -> Unit, resolveArt: suspend (DriveAlbum) -> Any?) {
+    var art by remember(album.id) { mutableStateOf<Any?>(null) }
+    LaunchedEffect(album.id) { art = resolveArt(album) }
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(48.dp)
+                .clip(RoundedCornerShape(6.dp))
+                .background(placeholderColorFor(album.name)),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (art != null) {
+                AsyncImage(
+                    model = art,
+                    contentDescription = album.name,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            } else {
+                Text(album.name.take(1).uppercase(), color = Color.White)
+            }
+        }
+        Spacer(Modifier.width(12.dp))
+        Column {
+            Text(album.name, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (album.artistHint != null) {
+                Text(
+                    album.artistHint,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun TrackResultRow(match: TrackMatch, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(48.dp)
+                .clip(RoundedCornerShape(6.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(Icons.Filled.MusicNote, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Spacer(Modifier.width(12.dp))
+        Column {
+            Text(
+                match.track.name.withoutAudioExtension(),
+                style = MaterialTheme.typography.bodyLarge,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(
+                match.album.name,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
     }
 }

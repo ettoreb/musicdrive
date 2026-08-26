@@ -26,7 +26,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Sort
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.LibraryMusic
-import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
@@ -94,7 +93,7 @@ import com.ettore.musicdrive.ui.LyricsScreen
 import com.ettore.musicdrive.ui.MiniPlayerBar
 import com.ettore.musicdrive.ui.QueueScreen
 import com.ettore.musicdrive.ui.ScreenHeader
-import com.ettore.musicdrive.ui.SearchScreen
+import com.ettore.musicdrive.ui.SearchOverlayScreen
 import com.ettore.musicdrive.ui.SettingsScreen
 import com.ettore.musicdrive.ui.StatsScreen
 import com.ettore.musicdrive.ui.TopArtistItem
@@ -221,19 +220,17 @@ private sealed class AppState {
 
 private sealed class LibraryRoute {
     data object Home : LibraryRoute()
-    data object Search : LibraryRoute()
     data object Library : LibraryRoute()
     data object Settings : LibraryRoute()
     data class ArtistAlbums(val artist: ArtistSummary) : LibraryRoute()
     data class AlbumDetail(val album: DriveAlbum, val backTo: LibraryRoute) : LibraryRoute()
 }
 
-/** The four permanent bottom-nav destinations; Library covers browsing plus any drill-down within it. */
-private enum class BottomTab { HOME, SEARCH, LIBRARY, SETTINGS }
+/** The three permanent bottom-nav destinations; Library covers browsing plus any drill-down within it. */
+private enum class BottomTab { HOME, LIBRARY, SETTINGS }
 
 private fun LibraryRoute.bottomTab(): BottomTab = when (this) {
     is LibraryRoute.Home -> BottomTab.HOME
-    is LibraryRoute.Search -> BottomTab.SEARCH
     is LibraryRoute.Settings -> BottomTab.SETTINGS
     is LibraryRoute.Library, is LibraryRoute.ArtistAlbums, is LibraryRoute.AlbumDetail -> BottomTab.LIBRARY
 }
@@ -262,6 +259,7 @@ private fun MusicDriveApp(
     var isQueueVisible by remember { mutableStateOf(false) }
     var isLyricsVisible by remember { mutableStateOf(false) }
     var isStatsVisible by remember { mutableStateOf(false) }
+    var isSearchVisible by remember { mutableStateOf(false) }
     var currentRootFolderId by remember { mutableStateOf<String?>(null) }
     var isRefreshingAlbum by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
@@ -270,7 +268,6 @@ private fun MusicDriveApp(
     fun selectBottomTab(tab: BottomTab) {
         libraryRoute = when (tab) {
             BottomTab.HOME -> LibraryRoute.Home
-            BottomTab.SEARCH -> LibraryRoute.Search
             BottomTab.LIBRARY -> LibraryRoute.Library
             BottomTab.SETTINGS -> LibraryRoute.Settings
         }
@@ -601,22 +598,12 @@ private fun MusicDriveApp(
                                             isPlayerExpanded = true
                                         }
                                     },
+                                    onOpenSearch = { isSearchVisible = true },
                                     resolveArt = albumArtRepository::resolveArt,
                                     resolveArtistArt = albumArtRepository::resolveArtistArt,
                                     modifier = Modifier.weight(1f),
                                 )
                             }
-
-                            is LibraryRoute.Search -> SearchScreen(
-                                albums = current.albums,
-                                onAlbumClick = { libraryRoute = LibraryRoute.AlbumDetail(it, backTo = LibraryRoute.Search) },
-                                onTrackClick = { album, index ->
-                                    onPlayAlbum(album, index)
-                                    isPlayerExpanded = true
-                                },
-                                resolveArt = albumArtRepository::resolveArt,
-                                modifier = Modifier.fillMaxSize(),
-                            )
 
                             is LibraryRoute.Library -> Column(modifier = Modifier.fillMaxSize()) {
                                 Row(
@@ -683,8 +670,6 @@ private fun MusicDriveApp(
                                 onRemoveAllDownloads = { downloadTracker.removeAll() },
                                 themeMode = themeMode,
                                 onThemeModeChange = { mode -> scope.launch { settingsRepository.setThemeMode(mode) } },
-                                defaultAlbumSortMode = albumSortMode,
-                                onDefaultAlbumSortModeChange = { mode -> scope.launch { settingsRepository.setAlbumSortMode(mode) } },
                                 onOpenStats = { isStatsVisible = true },
                                 onBack = { libraryRoute = LibraryRoute.Home },
                                 modifier = Modifier.fillMaxSize(),
@@ -801,6 +786,25 @@ private fun MusicDriveApp(
                 modifier = Modifier.fillMaxSize(),
             )
         }
+
+        if (isSearchVisible) {
+            BackHandler { isSearchVisible = false }
+            SearchOverlayScreen(
+                albums = loadedAlbums,
+                onAlbumClick = {
+                    isSearchVisible = false
+                    libraryRoute = LibraryRoute.AlbumDetail(it, backTo = LibraryRoute.Home)
+                },
+                onTrackClick = { album, index ->
+                    isSearchVisible = false
+                    onPlayAlbum(album, index)
+                    isPlayerExpanded = true
+                },
+                onBack = { isSearchVisible = false },
+                resolveArt = albumArtRepository::resolveArt,
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
     }
 }
 
@@ -865,12 +869,6 @@ private fun MusicDriveBottomBar(selected: BottomTab, onSelect: (BottomTab) -> Un
             onClick = { onSelect(BottomTab.HOME) },
             icon = { Icon(Icons.Filled.Home, contentDescription = null) },
             label = { Text("Home") },
-        )
-        NavigationBarItem(
-            selected = selected == BottomTab.SEARCH,
-            onClick = { onSelect(BottomTab.SEARCH) },
-            icon = { Icon(Icons.Filled.Search, contentDescription = null) },
-            label = { Text("Search") },
         )
         NavigationBarItem(
             selected = selected == BottomTab.LIBRARY,
