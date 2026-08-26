@@ -38,6 +38,7 @@ private data class PathEntry(val id: String, val name: String)
 fun FolderPickerScreen(
     driveRepository: DriveRepository,
     onFolderSelected: (folderId: String, folderName: String) -> Unit,
+    onCancel: (() -> Unit)? = null,
 ) {
     var path by remember { mutableStateOf(listOf(PathEntry(DRIVE_ROOT_FOLDER_ID, "My Drive"))) }
     var folders by remember { mutableStateOf<List<DriveFolder>>(emptyList()) }
@@ -70,7 +71,15 @@ fun FolderPickerScreen(
                     Text("Up")
                 }
             }
-            Text(currentFolder.name, style = MaterialTheme.typography.titleMedium)
+            Text(currentFolder.name, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+            // Only reachable now that this screen can be entered from Settings (changing the
+            // Drive folder, or picking Google Drive as the cloud provider) rather than only on
+            // first run - a way to back out without having to pick a folder is needed there.
+            if (onCancel != null) {
+                TextButton(onClick = onCancel) {
+                    Text("Cancel")
+                }
+            }
         }
 
         Box(modifier = Modifier.weight(1f).fillMaxWidth()) {

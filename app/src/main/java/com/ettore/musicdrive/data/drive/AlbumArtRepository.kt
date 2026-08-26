@@ -2,13 +2,16 @@ package com.ettore.musicdrive.data.drive
 
 import android.content.Context
 import android.media.MediaMetadataRetriever
-import com.ettore.musicdrive.auth.DriveTokenProvider
 import com.ettore.musicdrive.data.local.room.AlbumTagsDao
 import com.ettore.musicdrive.data.local.room.AlbumTagsEntity
 import com.ettore.musicdrive.data.local.room.AlbumYearDao
 import com.ettore.musicdrive.data.local.room.AlbumYearEntity
 import com.ettore.musicdrive.data.local.room.TrackOrderDao
 import com.ettore.musicdrive.data.local.room.TrackOrderEntity
+import com.ettore.musicdrive.data.source.MusicSource
+import com.ettore.musicdrive.data.source.SourceType
+import com.ettore.musicdrive.data.source.rawId
+import com.ettore.musicdrive.data.source.sourceTypeOfId
 import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
@@ -42,11 +45,12 @@ import org.json.JSONObject
  */
 class AlbumArtRepository(
     context: Context,
-    private val tokenProvider: DriveTokenProvider,
+    private val sources: Map<SourceType, MusicSource>,
     private val yearDao: AlbumYearDao,
     private val trackOrderDao: TrackOrderDao,
     private val tagsDao: AlbumTagsDao,
 ) {
+    private fun sourceFor(id: String): MusicSource = sources.getValue(id.sourceTypeOfId())
     private val diskCacheDir = File(context.filesDir, "album_art").apply { mkdirs() }
     private val artistArtDiskCacheDir = File(context.filesDir, "artist_art").apply { mkdirs() }
     private val artMemoryCache = mutableMapOf<String, File?>()
@@ -276,13 +280,8 @@ class AlbumArtRepository(
     }
 
     private suspend fun extractEmbeddedTrackNumber(track: DriveAudioFile): Int? {
-        val token = tokenProvider.getAccessToken().getOrNull() ?: return null
-        val retriever = MediaMetadataRetriever()
+        val retriever = sourceFor(track.id).openRetriever(track.id.rawId()) ?: return null
         return try {
-            retriever.setDataSource(
-                "https://www.googleapis.com/drive/v3/files/${track.id}?alt=media",
-                mapOf("Authorization" to "Bearer $token"),
-            )
             // Tags sometimes encode "track/total" (e.g. "3/12") - only the track half matters here.
             retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_CD_TRACK_NUMBER)
                 ?.substringBefore('/')
@@ -295,20 +294,10 @@ class AlbumArtRepository(
         }
     }
 
+    /** Delegates to whichever MusicSource owns the album's first track - see MusicSource.openRetriever for why this varies per source (Bearer header vs. context+content-Uri). */
     private suspend fun openRetriever(album: DriveAlbum): MediaMetadataRetriever? {
         val track = album.tracks.firstOrNull() ?: return null
-        val token = tokenProvider.getAccessToken().getOrNull() ?: return null
-        val retriever = MediaMetadataRetriever()
-        return try {
-            retriever.setDataSource(
-                "https://www.googleapis.com/drive/v3/files/${track.id}?alt=media",
-                mapOf("Authorization" to "Bearer $token"),
-            )
-            retriever
-        } catch (e: Exception) {
-            retriever.release()
-            null
-        }
+        return sourceFor(track.id).openRetriever(track.id.rawId())
     }
 
     private suspend fun extractEmbeddedPicture(album: DriveAlbum): ByteArray? {

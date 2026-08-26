@@ -9,6 +9,7 @@ import androidx.media3.exoplayer.offline.DownloadRequest
 import androidx.media3.exoplayer.offline.DownloadService
 import com.ettore.musicdrive.data.drive.DriveAlbum
 import com.ettore.musicdrive.data.drive.DriveAudioFile
+import com.ettore.musicdrive.data.source.rawId
 import com.ettore.musicdrive.playback.driveMediaUri
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -80,8 +81,9 @@ class DownloadTracker(
         })
     }
 
+    /** Drive-only - a caller must never invoke this for a local-sourced track (already local, nothing to download); see AlbumDetailScreen's sourceType check on the download button. */
     fun downloadTrack(track: DriveAudioFile, albumId: String) {
-        val request = DownloadRequest.Builder(track.id, Uri.parse(driveMediaUri(track.id)))
+        val request = DownloadRequest.Builder(track.id, Uri.parse(driveMediaUri(track.id.rawId())))
             .setData(albumId.toByteArray(Charsets.UTF_8))
             .build()
         DownloadService.sendAddDownload(context, MusicDownloadService::class.java, request, false)

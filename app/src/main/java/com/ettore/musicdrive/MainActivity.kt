@@ -1,8 +1,10 @@
 package com.ettore.musicdrive
 
 import android.content.ComponentName
+import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Canvas as AndroidCanvas
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.StatFs
@@ -58,6 +60,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.documentfile.provider.DocumentFile
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
@@ -76,12 +79,17 @@ import com.ettore.musicdrive.data.drive.AlbumArtRepository
 import com.ettore.musicdrive.data.drive.DriveAlbum
 import com.ettore.musicdrive.data.drive.DriveRepository
 import com.ettore.musicdrive.data.local.AlbumSortMode
+import com.ettore.musicdrive.data.local.CloudProvider
 import com.ettore.musicdrive.data.local.LibraryViewMode
+import com.ettore.musicdrive.data.local.LocalMusicSource
 import com.ettore.musicdrive.data.local.SettingsRepository
 import com.ettore.musicdrive.data.local.ThemeMode
+import com.ettore.musicdrive.data.source.MusicSource
+import com.ettore.musicdrive.data.source.SourceType
+import com.ettore.musicdrive.data.source.rawId
+import com.ettore.musicdrive.data.source.sourceTypeOfId
 import com.ettore.musicdrive.download.DownloadTracker
 import com.ettore.musicdrive.playback.MusicPlaybackService
-import com.ettore.musicdrive.playback.driveMediaUri
 import com.ettore.musicdrive.ui.AlbumDetailScreen
 import com.ettore.musicdrive.ui.ArtistListScreen
 import com.ettore.musicdrive.ui.ArtistSummary
@@ -118,6 +126,8 @@ class MainActivity : ComponentActivity() {
     private lateinit var signInManager: GoogleSignInManager
     private lateinit var driveAuthorizationManager: DriveAuthorizationManager
     private lateinit var driveRepository: DriveRepository
+    private lateinit var localMusicSource: LocalMusicSource
+    private lateinit var musicSources: Map<SourceType, MusicSource>
     private lateinit var libraryRepository: LibraryRepository
     private lateinit var albumArtRepository: AlbumArtRepository
     private lateinit var settingsRepository: SettingsRepository
@@ -131,6 +141,19 @@ class MainActivity : ComponentActivity() {
 
     private val requestNotificationPermission =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) {}
+
+    // Compose-observable so MusicDriveApp's LaunchedEffect can react to a folder having been
+    // picked - the actual settings-mutation/reload logic lives inside that composable (it needs
+    // state/libraryRoute, which are local to it), this launcher just surfaces the picked Uri.
+    private var pickedLocalFolderUri by mutableStateOf<Uri?>(null)
+
+    private val pickLocalFolder = registerForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        if (uri != null) {
+            // Must survive a reboot, or the grant is gone next launch - see SettingsRepository.localFolderTreeUri.
+            contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            pickedLocalFolderUri = uri
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -146,15 +169,17 @@ class MainActivity : ComponentActivity() {
         val tokenProvider = app.driveTokenProvider
         tokenProvider.setAuthorizer(driveAuthorizationManager)
         driveRepository = DriveRepository(tokenProvider)
-        libraryRepository = LibraryRepository(driveRepository, app.database.libraryDao())
+        localMusicSource = LocalMusicSource(applicationContext)
+        musicSources = mapOf(SourceType.DRIVE to driveRepository, SourceType.LOCAL to localMusicSource)
+        settingsRepository = app.settingsRepository
+        libraryRepository = LibraryRepository(musicSources, settingsRepository, app.database.libraryDao())
         albumArtRepository = AlbumArtRepository(
             this,
-            tokenProvider,
+            musicSources,
             app.database.albumYearDao(),
             app.database.trackOrderDao(),
             app.database.albumTagsDao(),
         )
-        settingsRepository = app.settingsRepository
         lyricsRepository = LyricsRepository(app.database.lyricsDao())
         downloadTracker = app.downloadTracker
         playStatsRepository = app.playStatsRepository
@@ -173,6 +198,7 @@ class MainActivity : ComponentActivity() {
                 MusicDriveApp(
                     signInManager = signInManager,
                     driveRepository = driveRepository,
+                    musicSources = musicSources,
                     libraryRepository = libraryRepository,
                     albumArtRepository = albumArtRepository,
                     settingsRepository = settingsRepository,
@@ -184,6 +210,9 @@ class MainActivity : ComponentActivity() {
                     onPlayAlbum = ::playAlbum,
                     isSignedInThisProcess = app.isSignedInThisProcess,
                     onSignedIn = { app.isSignedInThisProcess = true },
+                    pickedLocalFolderUri = pickedLocalFolderUri,
+                    onLocalFolderUriConsumed = { pickedLocalFolderUri = null },
+                    onRequestLocalFolder = { pickLocalFolder.launch(null) },
                 )
             }
         }
@@ -192,9 +221,10 @@ class MainActivity : ComponentActivity() {
     private fun playAlbum(album: DriveAlbum, startIndex: Int) {
         val controller = mediaController ?: return
         val mediaItems = album.tracks.map { track ->
+            val source = musicSources.getValue(track.id.sourceTypeOfId())
             MediaItem.Builder()
                 .setMediaId(track.id)
-                .setUri(driveMediaUri(track.id))
+                .setUri(source.mediaUri(track.id.rawId()))
                 // Best-guess metadata (the Drive filename) so the queue has something to
                 // show for tracks Media3 hasn't decoded yet; real ID3 metadata overrides
                 // this automatically once a track actually starts playing.
@@ -221,7 +251,7 @@ private sealed class AppState {
     data object SignedOut : AppState()
     data object Loading : AppState()
     data object PickingFolder : AppState()
-    data class LibraryLoaded(val libraryFolderName: String?, val albums: List<DriveAlbum>) : AppState()
+    data class LibraryLoaded(val albums: List<DriveAlbum>) : AppState()
     data class Error(val message: String) : AppState()
 }
 
@@ -257,6 +287,7 @@ private const val HOME_GRID_LIMIT = 12
 private fun MusicDriveApp(
     signInManager: GoogleSignInManager,
     driveRepository: DriveRepository,
+    musicSources: Map<SourceType, MusicSource>,
     libraryRepository: LibraryRepository,
     albumArtRepository: AlbumArtRepository,
     settingsRepository: SettingsRepository,
@@ -268,6 +299,9 @@ private fun MusicDriveApp(
     onPlayAlbum: (DriveAlbum, startIndex: Int) -> Unit,
     isSignedInThisProcess: Boolean,
     onSignedIn: () -> Unit,
+    pickedLocalFolderUri: Uri?,
+    onLocalFolderUriConsumed: () -> Unit,
+    onRequestLocalFolder: () -> Unit,
 ) {
     var state by remember { mutableStateOf<AppState>(AppState.Loading) }
     var libraryRoute by remember { mutableStateOf<LibraryRoute>(LibraryRoute.Home) }
@@ -276,7 +310,9 @@ private fun MusicDriveApp(
     var isLyricsVisible by remember { mutableStateOf(false) }
     var isStatsVisible by remember { mutableStateOf(false) }
     var isSearchVisible by remember { mutableStateOf(false) }
-    var currentRootFolderId by remember { mutableStateOf<String?>(null) }
+    // Session-only display labels (not persisted - same "nice when set this session,
+    // not guaranteed after a relaunch" spirit the old single libraryFolderName had).
+    var driveFolderName by remember { mutableStateOf<String?>(null) }
     var isRefreshingAlbum by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
@@ -300,36 +336,40 @@ private fun MusicDriveApp(
         }
     }
 
-    suspend fun loadLibrary(rootFolderId: String, rootFolderName: String?) {
-        currentRootFolderId = rootFolderId
+    // A source is "usable standalone" for the fallback logic below when it's enabled/selected AND
+    // has an actual root configured - mirrors activeRoots() in LibraryRepository, but that's
+    // suspend/private there; this is just the "is local ready" half, needed synchronously-ish here.
+    suspend fun localFolderReady(): Boolean =
+        settingsRepository.localFolderEnabled.first() && settingsRepository.localFolderTreeUri.first() != null
+
+    suspend fun loadLibrary() {
         state = AppState.Loading
         // Always reopens on Home, matching every mainstream music app's launch behavior -
         // Search/Library/Settings are reachable in one tap from the bottom nav regardless.
         libraryRoute = LibraryRoute.Home
-        // Emits cached data first (if any) for an instant browse, then again once the
-        // live Drive fetch lands - the route reset above only happens once, up front,
-        // so a background refresh mid-browse doesn't kick the user out of an album.
-        libraryRepository.loadLibrary(rootFolderId).collect { result ->
+        // Emits cached data first (if any) for an instant browse, then again once each active
+        // source's live fetch lands - the route reset above only happens once, up front, so a
+        // background refresh mid-browse doesn't kick the user out of an album.
+        libraryRepository.loadLibrary().collect { result ->
             result.fold(
-                onSuccess = { albums -> state = AppState.LibraryLoaded(rootFolderName, albums) },
-                onFailure = { e -> state = AppState.Error(e.message ?: "Failed to list Drive files") },
+                onSuccess = { albums -> state = AppState.LibraryLoaded(albums) },
+                onFailure = { e -> state = AppState.Error(e.message ?: "Failed to load library") },
             )
         }
     }
 
-    // Pull-to-refresh on the album detail page: re-fetches the WHOLE library from Drive (same
-    // cost as the background refresh loadLibrary already does on every launch, cheap at
-    // personal-library scale) rather than just this one album's folder, so a newly added song
-    // shows up whichever album/artist view the user goes back to, not just this screen. Keeps
-    // the current route instead of resetting to Home, and swaps in the refreshed album object
-    // (by id) so the currently-open AlbumDetail screen shows the new track immediately.
+    // Pull-to-refresh on the album detail page: re-fetches every active source (same cost as the
+    // background refresh loadLibrary already does on every launch, cheap at personal-library
+    // scale) rather than just this one album's folder, so a newly added song shows up whichever
+    // album/artist view the user goes back to, not just this screen. Keeps the current route
+    // instead of resetting to Home, and swaps in the refreshed album object (by id) so the
+    // currently-open AlbumDetail screen shows the new track immediately.
     fun refreshCurrentAlbum(albumId: String) {
-        val rootFolderId = currentRootFolderId ?: return
         if (isRefreshingAlbum) return
         scope.launch {
             isRefreshingAlbum = true
             try {
-                libraryRepository.refreshLibrary(rootFolderId).onSuccess { albums ->
+                libraryRepository.refreshLibrary().onSuccess { albums ->
                     val current = state as? AppState.LibraryLoaded ?: return@onSuccess
                     state = current.copy(albums = albums)
                     val refreshedAlbum = albums.find { it.id == albumId }
@@ -344,20 +384,28 @@ private fun MusicDriveApp(
         }
     }
 
-    fun onFolderSelected(folderId: String, folderName: String) {
-        scope.launch {
-            settingsRepository.setLibraryRootFolderId(folderId)
-            libraryRepository.clearCache()
-            loadLibrary(folderId, folderName)
+    suspend fun proceedToLibraryOrPicker() {
+        if (settingsRepository.cloudProvider.first() == CloudProvider.GOOGLE_DRIVE &&
+            settingsRepository.driveRootFolderId.first() == null
+        ) {
+            state = AppState.PickingFolder
+        } else {
+            loadLibrary()
         }
     }
 
-    suspend fun proceedToLibraryOrPicker() {
-        val rootFolderId = settingsRepository.libraryRootFolderId.first()
-        if (rootFolderId == null) {
-            state = AppState.PickingFolder
-        } else {
-            loadLibrary(rootFolderId, rootFolderName = null)
+    fun onFolderSelected(folderId: String, folderName: String) {
+        scope.launch {
+            val previous = settingsRepository.driveRootFolderId.first()
+            settingsRepository.setDriveRootFolderId(folderId)
+            driveFolderName = folderName
+            // An actual folder CHANGE (not the first pick) invalidates Drive's cached rows -
+            // a plain cloudProvider on/off toggle elsewhere does NOT do this, see
+            // docs/multi-source-plan.md §7's on/off-vs-clear table.
+            if (previous != null && previous != folderId) {
+                libraryRepository.clearSourceCache(SourceType.DRIVE)
+            }
+            proceedToLibraryOrPicker()
         }
     }
 
@@ -371,23 +419,75 @@ private fun MusicDriveApp(
                     proceedToLibraryOrPicker()
                 }
                 is SignInResult.NoCredential -> {
-                    state = AppState.SignedOut
+                    // Drive is unusable this session, but local is a valid standalone source -
+                    // don't hard-block behind a sign-in screen that has no path to Settings.
+                    if (localFolderReady()) loadLibrary() else state = AppState.SignedOut
                 }
                 is SignInResult.Failure -> {
-                    state = AppState.Error(signIn.message)
+                    if (localFolderReady()) loadLibrary() else state = AppState.Error(signIn.message)
                 }
             }
         }
     }
 
-    // Try to resume a previously authorized account silently before ever showing the sign-in
-    // button - but only hit Credential Manager once per process. Recomposing this effect (e.g.
-    // the OS recreating the Activity after reclaiming it in the background) would otherwise
-    // re-invoke getCredential() every time, which can flash a brief system UI even in "silent"
-    // mode; isSignedInThisProcess survives that recreation, so once we're already authorized this
-    // process, just re-derive the route from local state instead.
+    fun onLocalFolderToggled(enabled: Boolean) {
+        scope.launch {
+            settingsRepository.setLocalFolderEnabled(enabled)
+            if (enabled && settingsRepository.localFolderTreeUri.first() == null) {
+                onRequestLocalFolder()
+            } else {
+                proceedToLibraryOrPicker()
+            }
+        }
+    }
+
+    fun onCloudProviderChanged(provider: CloudProvider) {
+        scope.launch {
+            settingsRepository.setCloudProvider(provider)
+            if (provider == CloudProvider.GOOGLE_DRIVE) {
+                // Confirms Drive access works (silently succeeds if already signed in) and, via
+                // its own Success path, calls proceedToLibraryOrPicker - which shows the folder
+                // picker if no Drive root is chosen yet.
+                signInAndProceed(interactive = true)
+            } else {
+                proceedToLibraryOrPicker()
+            }
+        }
+    }
+
+    // A folder was just picked in the system SAF UI (MainActivity's launcher callback surfaces
+    // it here, since the settings-mutation/reload logic needs state/libraryRoute, local to this
+    // composable). Consumed once so it isn't re-applied on every recomposition - but only as the
+    // LAST step: onLocalFolderUriConsumed() flips pickedLocalFolderUri back to null, which is
+    // this exact LaunchedEffect's own key, so calling it any earlier cancels this coroutine
+    // mid-flight the moment Compose recomposes with the new key - a real bug found live (state
+    // got stuck on the Loading spinner forever because proceedToLibraryOrPicker()'s
+    // loadLibrary().collect() was cancelled before its first emission ever reached the collector).
+    LaunchedEffect(pickedLocalFolderUri) {
+        val uri = pickedLocalFolderUri ?: return@LaunchedEffect
+        val newUriString = uri.toString()
+        val previous = settingsRepository.localFolderTreeUri.first()
+        settingsRepository.setLocalFolderTreeUri(newUriString)
+        settingsRepository.setLocalFolderEnabled(true)
+        if (previous != null && previous != newUriString) {
+            libraryRepository.clearSourceCache(SourceType.LOCAL)
+        }
+        proceedToLibraryOrPicker()
+        onLocalFolderUriConsumed()
+    }
+
+    // Try to resume a previously authorized Drive account silently before ever showing the
+    // sign-in button - but only hit Credential Manager once per process, and only when Drive is
+    // even the active cloud provider (a local-only or unconfigured setup has no reason to touch
+    // sign-in at all). Recomposing this effect (e.g. the OS recreating the Activity after
+    // reclaiming it in the background) would otherwise re-invoke getCredential() every time,
+    // which can flash a brief system UI even in "silent" mode; isSignedInThisProcess survives
+    // that recreation, so once we're already authorized this process, just re-derive the route
+    // from local state instead.
     LaunchedEffect(Unit) {
-        if (isSignedInThisProcess) {
+        if (settingsRepository.cloudProvider.first() != CloudProvider.GOOGLE_DRIVE) {
+            proceedToLibraryOrPicker()
+        } else if (isSignedInThisProcess) {
             proceedToLibraryOrPicker()
         } else {
             signInAndProceed(interactive = false)
@@ -403,6 +503,8 @@ private fun MusicDriveApp(
     val libraryViewMode by settingsRepository.libraryViewMode.collectAsState(initial = LibraryViewMode.ARTISTS)
     val topTrackCounts by playStatsRepository.observeTopTracks(HOME_GRID_LIMIT).collectAsState(initial = emptyList())
     val allPlayCounts by playStatsRepository.observeAll().collectAsState(initial = emptyList())
+    val localFolderEnabled by settingsRepository.localFolderEnabled.collectAsState(initial = false)
+    val cloudProvider by settingsRepository.cloudProvider.collectAsState(initial = CloudProvider.NONE)
 
     // Refreshed each time Settings is opened (not continuously) - a personal-library-scale disk
     // walk / Cache.getCacheSpace() call is cheap but pointless to repeat while the user isn't
@@ -410,6 +512,7 @@ private fun MusicDriveApp(
     var streamingCacheUsageBytes by remember { mutableStateOf(0L) }
     var artDiskUsageBytes by remember { mutableStateOf(0L) }
     var freeStorageBytes by remember { mutableStateOf(0L) }
+    var localFolderLabel by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(libraryRoute) {
         if (libraryRoute is LibraryRoute.Settings) {
             streamingCacheUsageBytes = streamingCache.cacheSpace
@@ -418,6 +521,9 @@ private fun MusicDriveApp(
             // live on) - shown in the storage dialog so the size slider can't offer a limit
             // bigger than what's actually available right now.
             freeStorageBytes = StatFs(context.filesDir.path).availableBytes
+            localFolderLabel = settingsRepository.localFolderTreeUri.first()?.let { uriString ->
+                runCatching { DocumentFile.fromTreeUri(context, Uri.parse(uriString))?.name }.getOrNull()
+            }
         }
     }
 
@@ -632,6 +738,15 @@ private fun MusicDriveApp(
                         is AppState.PickingFolder -> FolderPickerScreen(
                             driveRepository = driveRepository,
                             onFolderSelected = ::onFolderSelected,
+                            // Reachable from Settings now (not just first run), so back out by
+                            // reverting to no cloud provider instead of forcing a pick - safe in
+                            // every case, including a fresh cold start with nothing configured.
+                            onCancel = {
+                                scope.launch {
+                                    settingsRepository.setCloudProvider(CloudProvider.NONE)
+                                    proceedToLibraryOrPicker()
+                                }
+                            },
                         )
 
                         is AppState.LibraryLoaded -> {
@@ -717,9 +832,14 @@ private fun MusicDriveApp(
                             }
 
                             is LibraryRoute.Settings -> SettingsScreen(
-                                libraryFolderLabel = "Change library folder" +
-                                    (current.libraryFolderName?.let { " (currently \"$it\")" } ?: ""),
-                                onChangeFolder = { state = AppState.PickingFolder },
+                                localFolderEnabled = localFolderEnabled,
+                                localFolderLabel = localFolderLabel,
+                                onToggleLocalFolder = ::onLocalFolderToggled,
+                                onChangeLocalFolder = onRequestLocalFolder,
+                                cloudProvider = cloudProvider,
+                                onCloudProviderChange = ::onCloudProviderChanged,
+                                driveFolderLabel = driveFolderName,
+                                onChangeDriveFolder = { state = AppState.PickingFolder },
                                 cacheLimitBytes = cacheLimitBytes,
                                 onCacheLimitChange = { bytes -> scope.launch { settingsRepository.setCacheLimitBytes(bytes) } },
                                 streamingCacheUsageBytes = streamingCacheUsageBytes,

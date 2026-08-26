@@ -1,8 +1,10 @@
 package com.ettore.musicdrive.playback
 
+import android.content.Context
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DataSpec
+import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.HttpDataSource
 import androidx.media3.datasource.cache.CacheDataSource
@@ -57,13 +59,13 @@ fun buildAuthenticatingHttpDataSourceFactory(tokenProvider: DriveTokenProvider):
     AuthenticatingHttpDataSourceFactory(tokenProvider)
 
 /**
- * Playback source resolution order: download cache -> streaming cache ->
- * network. Downloads are written only by Media3's DownloadManager, never by
- * this playback path (setCacheWriteDataSinkFactory(null) on the download
- * cache layer), matching the two-cache split in CLAUDE.md.
+ * Playback source resolution order for a Drive (http/https) track: download cache -> streaming
+ * cache -> network. Downloads are written only by Media3's DownloadManager, never by this
+ * playback path (setCacheWriteDataSinkFactory(null) on the download cache layer), matching the
+ * two-cache split in CLAUDE.md.
  */
 @UnstableApi
-fun buildDriveDataSourceFactory(
+private fun buildDriveDataSourceFactory(
     application: MusicDriveApplication,
     tokenProvider: DriveTokenProvider,
 ): DataSource.Factory {
@@ -79,3 +81,21 @@ fun buildDriveDataSourceFactory(
         .setCacheWriteDataSinkFactory(null)
         .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
 }
+
+/**
+ * The single DataSource.Factory the whole player uses for its entire lifetime (it must handle a
+ * Drive album played now and a local album played later, in the same session - a per-item queue
+ * built by MainActivity.playAlbum is always single-source, but the player itself isn't). Wraps
+ * the Drive-specific cache chain above as the "base" of a DefaultDataSource.Factory:
+ * DefaultDataSource already special-cases content:// -> ContentDataSource and file:// ->
+ * FileDataSource, delegating only http(s):// to the wrapped base - so a local track's content://
+ * URI never touches Drive auth or either SimpleCache at all, automatically, by URI scheme, with
+ * no per-source branching needed anywhere else in playback (see docs/multi-source-plan.md §5).
+ */
+@UnstableApi
+fun buildPlaybackDataSourceFactory(
+    context: Context,
+    application: MusicDriveApplication,
+    tokenProvider: DriveTokenProvider,
+): DataSource.Factory =
+    DefaultDataSource.Factory(context, buildDriveDataSourceFactory(application, tokenProvider))

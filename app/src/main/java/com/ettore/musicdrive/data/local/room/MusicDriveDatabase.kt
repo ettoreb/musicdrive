@@ -13,7 +13,7 @@ import androidx.room.RoomDatabase
         TrackOrderEntity::class,
         AlbumTagsEntity::class,
     ],
-    version = 7,
+    version = 8,
     exportSchema = false,
 )
 abstract class MusicDriveDatabase : RoomDatabase() {

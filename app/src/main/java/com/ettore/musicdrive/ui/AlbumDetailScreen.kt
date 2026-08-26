@@ -40,6 +40,8 @@ import androidx.compose.ui.unit.dp
 import androidx.media3.exoplayer.offline.Download
 import coil3.compose.AsyncImage
 import com.ettore.musicdrive.data.drive.DriveAlbum
+import com.ettore.musicdrive.data.source.SourceType
+import com.ettore.musicdrive.data.source.sourceTypeOfId
 import com.ettore.musicdrive.download.AlbumDownloadState
 import com.ettore.musicdrive.download.albumDownloadState
 
@@ -108,12 +110,16 @@ fun AlbumDetailScreen(
                         )
                     }
 
-                    AlbumDownloadButton(
-                        state = albumDownloadState(album, downloads),
-                        onDownload = onDownloadAlbum,
-                        onRemove = onRemoveAlbumDownload,
-                        modifier = Modifier.padding(top = 16.dp, bottom = 8.dp),
-                    )
+                    // A local-sourced album is already fully on-device - "downloading" it is
+                    // meaningless, so the button is hidden entirely rather than disabled.
+                    if (album.id.sourceTypeOfId() != SourceType.LOCAL) {
+                        AlbumDownloadButton(
+                            state = albumDownloadState(album, downloads),
+                            onDownload = onDownloadAlbum,
+                            onRemove = onRemoveAlbumDownload,
+                            modifier = Modifier.padding(top = 16.dp, bottom = 8.dp),
+                        )
+                    }
                 }
             }
 

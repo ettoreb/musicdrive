@@ -26,6 +26,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -42,8 +43,14 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.media3.exoplayer.offline.Download
 import com.ettore.musicdrive.data.drive.DriveAlbum
+import com.ettore.musicdrive.data.local.CloudProvider
 import com.ettore.musicdrive.data.local.ThemeMode
 import kotlin.math.roundToInt
+
+private val cloudProviderOptions = listOf(
+    "None" to CloudProvider.NONE,
+    "Google Drive" to CloudProvider.GOOGLE_DRIVE,
+)
 
 private val cacheSizeOptions = listOf(
     "1 GB" to 1L * 1024 * 1024 * 1024,
@@ -62,8 +69,14 @@ private val themeModeOptions = listOf(
 
 @Composable
 fun SettingsScreen(
-    libraryFolderLabel: String,
-    onChangeFolder: () -> Unit,
+    localFolderEnabled: Boolean,
+    localFolderLabel: String?,
+    onToggleLocalFolder: (Boolean) -> Unit,
+    onChangeLocalFolder: () -> Unit,
+    cloudProvider: CloudProvider,
+    onCloudProviderChange: (CloudProvider) -> Unit,
+    driveFolderLabel: String?,
+    onChangeDriveFolder: () -> Unit,
     cacheLimitBytes: Long,
     onCacheLimitChange: (Long) -> Unit,
     streamingCacheUsageBytes: Long,
@@ -98,8 +111,33 @@ fun SettingsScreen(
                     .verticalScroll(rememberScrollState())
                     .padding(horizontal = 16.dp),
             ) {
-                SettingsSectionTitle("Library")
-                SettingsActionRow(label = libraryFolderLabel, onClick = onChangeFolder)
+                SettingsSectionTitle("Music Sources")
+                SettingsSwitchRow(
+                    label = "Local files",
+                    checked = localFolderEnabled,
+                    onCheckedChange = onToggleLocalFolder,
+                )
+                if (localFolderEnabled) {
+                    SettingsActionRow(
+                        label = localFolderLabel ?: "Choose folder",
+                        onClick = onChangeLocalFolder,
+                    )
+                }
+                Text(
+                    "Cloud",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 12.dp, bottom = 4.dp),
+                )
+                cloudProviderOptions.forEach { (label, provider) ->
+                    SettingsRadioRow(label = label, selected = provider == cloudProvider, onClick = { onCloudProviderChange(provider) })
+                }
+                if (cloudProvider == CloudProvider.GOOGLE_DRIVE) {
+                    SettingsActionRow(
+                        label = "Change Drive folder" + (driveFolderLabel?.let { " (currently \"$it\")" } ?: ""),
+                        onClick = onChangeDriveFolder,
+                    )
+                }
 
                 SettingsSectionTitle("Storage")
                 Text(
@@ -137,6 +175,13 @@ fun SettingsScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(top = 8.dp),
                 )
+                if (localFolderEnabled) {
+                    Text(
+                        "Local files aren't counted here - they're already on your device.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
 
                 SettingsSectionTitle("Appearance")
                 themeModeOptions.forEach { (label, mode) ->
@@ -365,6 +410,20 @@ private fun SettingsSectionTitle(title: String) {
         color = MaterialTheme.colorScheme.primary,
         modifier = Modifier.padding(top = 16.dp, bottom = 4.dp),
     )
+}
+
+@Composable
+private fun SettingsSwitchRow(label: String, checked: Boolean, onCheckedChange: (Boolean) -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable { onCheckedChange(!checked) }
+            .padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(label, style = MaterialTheme.typography.bodyLarge, modifier = Modifier.weight(1f))
+        Switch(checked = checked, onCheckedChange = onCheckedChange)
+    }
 }
 
 @Composable

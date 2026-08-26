@@ -19,10 +19,6 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.Musicdrive">
 
-        <meta-data
-            android:name="com.google.android.gms.car.application"
-            android:resource="@xml/automotive_app_desc" />
-
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -39,11 +35,6 @@
             android:foregroundServiceType="mediaPlayback">
             <intent-filter>
                 <action android:name="androidx.media3.session.MediaSessionService" />
-                <!-- The legacy MediaBrowserServiceCompat binding protocol Android Auto's
-                     head-unit-server actually uses to discover/bind this service - Media3's
-                     MediaLibraryService has a built-in compat shim, but only activates it
-                     when this action is declared. -->
-                <action android:name="android.media.browse.MediaBrowserService" />
             </intent-filter>
         </service>
 

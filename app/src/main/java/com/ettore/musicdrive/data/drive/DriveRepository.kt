@@ -1,6 +1,14 @@
 package com.ettore.musicdrive.data.drive
 
+import android.media.MediaMetadataRetriever
 import com.ettore.musicdrive.auth.DriveTokenProvider
+import com.ettore.musicdrive.data.source.MusicSource
+import com.ettore.musicdrive.data.source.SourceType
+import com.ettore.musicdrive.data.source.compoundId
+import com.ettore.musicdrive.data.source.discFolderPattern
+import com.ettore.musicdrive.data.source.discNumber
+import com.ettore.musicdrive.data.source.leadingTrackNumber
+import com.ettore.musicdrive.playback.driveMediaUri
 import com.google.api.client.googleapis.json.GoogleJsonResponseException
 import com.google.api.client.http.HttpRequestInitializer
 import com.google.api.client.http.javanet.NetHttpTransport
@@ -42,26 +50,16 @@ data class DriveAlbum(
     val tracks: List<DriveAudioFile>,
 )
 
-/** Matches "CD1", "CD 2", "Disc 1", "Disc 1 - Sounds Of The Universe", etc. - the real-world naming convention for multi-disc release subfolders. */
-private val discFolderPattern = Regex("""(?i)^(cd|disc)\s*(\d+)""")
-
-private fun discNumber(folderName: String): Int =
-    discFolderPattern.find(folderName)?.groupValues?.get(2)?.toIntOrNull() ?: Int.MAX_VALUE
-
-/** Matches the leading track number in a filename, e.g. "01 - Song.mp3", "2. Song.mp3", "07 Song.flac". */
-private val leadingTrackNumberPattern = Regex("""^\s*0*(\d+)""")
+// discFolderPattern/discNumber/leadingTrackNumber live in data.source.AlbumHeuristics now,
+// shared with LocalMusicSource's equivalent walk - the multi-disc-merge and track-order-fallback
+// heuristics only ever look at folder/file names, nothing Drive-specific.
 
 /**
- * Track number parsed from the front of a filename, for sorting an album's tracks into their real
- * running order. Drive's own `orderBy("name")` is a lexicographic STRING sort, so without this,
- * "10 - Song.mp3" sorts before "2 - Song.mp3" - a real, user-visible bug (album track order was
- * scrambled for any album past 9 tracks). Falls back to Int.MAX_VALUE (sorts last, then by name)
- * for a track with no leading number at all.
+ * Drive's own `orderBy("name")` is a lexicographic STRING sort, so without this, "10 - Song.mp3"
+ * sorts before "2 - Song.mp3" - a real, user-visible bug (album track order was scrambled for any
+ * album past 9 tracks).
  */
-private fun DriveFile.trackNumber(): Int =
-    leadingTrackNumberPattern.find(name)?.groupValues?.get(1)?.toIntOrNull() ?: Int.MAX_VALUE
-
-private val trackOrderComparator = compareBy<DriveFile>({ it.trackNumber() }, { it.name })
+private val trackOrderComparator = compareBy<DriveFile>({ leadingTrackNumber(it.name) }, { it.name })
 
 private data class AlbumFolderWithArtist(
     val folder: DriveFolder,
@@ -76,7 +74,7 @@ private data class AlbumFolderWithArtist(
 )
 
 private fun DriveFile.toDriveAudioFile() = DriveAudioFile(
-    id = id,
+    id = SourceType.DRIVE.compoundId(id),
     name = name,
     mimeType = mimeType,
     sizeBytes = getSize(),
@@ -84,10 +82,28 @@ private fun DriveFile.toDriveAudioFile() = DriveAudioFile(
 
 private fun DriveFile.toDriveFolder() = DriveFolder(id = id, name = name)
 
-class DriveRepository(private val tokenProvider: DriveTokenProvider) {
+class DriveRepository(private val tokenProvider: DriveTokenProvider) : MusicSource {
+
+    override val type = SourceType.DRIVE
+    override val requiresNetworkAuth = true
 
     private val transport = NetHttpTransport()
     private val jsonFactory = GsonFactory.getDefaultInstance()
+
+    override fun mediaUri(rawTrackId: String): String = driveMediaUri(rawTrackId)
+
+    /** Moved here from AlbumArtRepository, which used to build this exact Drive URL/header pair itself. */
+    override suspend fun openRetriever(rawTrackId: String): MediaMetadataRetriever? {
+        val token = tokenProvider.getAccessToken().getOrNull() ?: return null
+        val retriever = MediaMetadataRetriever()
+        return try {
+            retriever.setDataSource(driveMediaUri(rawTrackId), mapOf("Authorization" to "Bearer $token"))
+            retriever
+        } catch (e: Exception) {
+            retriever.release()
+            null
+        }
+    }
 
     private suspend fun buildClient(token: String): Drive {
         val requestInitializer = HttpRequestInitializer { request ->
@@ -234,13 +250,13 @@ class DriveRepository(private val tokenProvider: DriveTokenProvider) {
         withDrive { drive -> listFoldersRaw(drive, parentId) }
 
     /**
-     * Every album (see [collectAlbumFolders]) found under [rootFolderId],
+     * Every album (see [collectAlbumFolders]) found under [rootId],
      * each with its tracks. One traversal to find album folders, then one
      * combined query for every album's tracks, bucketed back to their album
      * via the track's parent folder id.
      */
-    suspend fun listLibraryAlbums(rootFolderId: String): Result<List<DriveAlbum>> = withDrive { drive ->
-        val albumFolders = collectAlbumFolders(drive, rootFolderId, folderName = null, artistName = null)
+    override suspend fun listLibraryAlbums(rootId: String): Result<List<DriveAlbum>> = withDrive { drive ->
+        val albumFolders = collectAlbumFolders(drive, rootId, folderName = null, artistName = null)
         if (albumFolders.isEmpty()) return@withDrive emptyList()
 
         val parentsClause = albumFolders
@@ -266,7 +282,7 @@ class DriveRepository(private val tokenProvider: DriveTokenProvider) {
         albumFolders
             .map { entry ->
                 DriveAlbum(
-                    id = entry.folder.id,
+                    id = SourceType.DRIVE.compoundId(entry.folder.id),
                     name = entry.folder.name,
                     artistHint = entry.artistName,
                     // Concatenated in sourceFolderIds order (already disc-number-sorted

@@ -1,13 +1,14 @@
 # MusicDrive
 
-**Stream your own music library straight from Google Drive — a
-personal, YouTube-Music-style player for Android.**
+**Stream your own music library from Google Drive, a local folder, or
+both — a personal, YouTube-Music-style player for Android.**
 
 No re-uploading to a streaming service, no re-encoding, no monthly fee:
-point MusicDrive at a Drive folder full of audio files and it turns that
-folder into a full-featured music app — background playback, offline
-downloads, synced lyrics, and a Material 3 UI, all built around whatever
-folder structure your library already uses.
+point MusicDrive at a Drive folder full of audio files, an on-device
+folder, or both at once, and it turns that into a full-featured music
+app — background playback, offline downloads, synced lyrics, and a
+Material 3 UI, all built around whatever folder structure your library
+already uses.
 
 > Personal project, sideloaded — not published to the Play Store.
 
@@ -21,9 +22,13 @@ folder structure your library already uses.
 
 ## Features
 
-- **Your library, your structure** — point it at any Drive folder and it
-  finds albums recursively, however your files are organized
-  (`Album/`, `Artist/Album/`, multi-disc releases merged automatically).
+- **Your library, your structure** — point it at any Drive folder and/or a
+  local on-device folder and it finds albums recursively, however your
+  files are organized (`Album/`, `Artist/Album/`, multi-disc releases
+  merged automatically). Local files are an independent on/off toggle,
+  combinable with Drive; when both are on and have the same album, your
+  local copy takes priority track-by-track (no network needed, nothing to
+  evict from cache) and Drive only fills in songs you don't have locally.
 - **Home dashboard** — your most-played songs and artists, plus an
   auto-generated "Liked Songs" playlist, so the app opens on what you
   actually listen to.
@@ -55,19 +60,17 @@ folder structure your library already uses.
   if Android kills the app process mid-song.
 - Material 3 UI throughout, light/dark/system theme.
 
-**Roadmap:** Android Auto support is next (browsing tree implemented,
-pending head-unit testing).
-
 ## How it works
 
-- **Library model**: a Drive folder = an album, found by searching down from
-  your chosen root for the first folder(s) that directly contain audio files
-  — so both `root/Album` and `root/Artist/Album` layouts work. Cached in
-  Room so relaunching browses instantly, refreshing quietly in the background.
-  Album and artist names shown in the app come from embedded tags first,
-  falling back to the folder name only when a track has no tag (or the tag
-  looks corrupted) — folder structure still decides which tracks make up an
-  album, tags just correct how its name and artist are displayed.
+- **Library model**: a folder = an album, found by searching down from your
+  chosen root(s) for the first folder(s) that directly contain audio files
+  — so both `root/Album` and `root/Artist/Album` layouts work, on Drive or
+  on-device alike. Cached in Room so relaunching browses instantly,
+  refreshing quietly in the background. Album and artist names shown in the
+  app come from embedded tags first, falling back to the folder name only
+  when a track has no tag (or the tag looks corrupted) — folder structure
+  still decides which tracks make up an album, tags just correct how its
+  name and artist are displayed.
 - **Playback**: Media3/ExoPlayer with two separate caches under one
   user-configurable combined size limit — an auto-managed streaming cache
   (least-played-first eviction) and a permanent cache for explicit

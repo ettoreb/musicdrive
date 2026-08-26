@@ -2,6 +2,8 @@ package com.ettore.musicdrive.data
 
 import com.ettore.musicdrive.data.local.room.PlayCountDao
 import com.ettore.musicdrive.data.local.room.PlayCountEntity
+import com.ettore.musicdrive.data.source.SourceType
+import com.ettore.musicdrive.data.source.compoundId
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
@@ -57,10 +59,21 @@ class PlayStatsRepository(private val playCountDao: PlayCountDao, private val ba
         (0 until json.length()).map { i ->
             val obj = json.getJSONObject(i)
             PlayCountEntity(
-                trackId = obj.getString("trackId"),
+                trackId = obj.getString("trackId").toCompoundTrackId(),
                 playCount = obj.getInt("playCount"),
                 lastPlayedAt = obj.getLong("lastPlayedAt"),
             )
         }
     }.getOrNull()
+
+    /**
+     * A backup written before the multi-source id format landed stores bare Drive file ids
+     * (e.g. "1a2b3c"), not "DRIVE:1a2b3c" - every pre-existing backup only ever came from Drive
+     * tracks (local sources didn't exist yet), so a legacy id is always safe to prefix as DRIVE.
+     * Without this, an upgrading install's real listening history would silently fail to match
+     * against the new mediaId format and look like it reset to zero - defeating the entire reason
+     * this backup file exists (see the class doc comment).
+     */
+    private fun String.toCompoundTrackId(): String =
+        if (SourceType.entries.any { startsWith("${it.name}:") }) this else SourceType.DRIVE.compoundId(this)
 }
