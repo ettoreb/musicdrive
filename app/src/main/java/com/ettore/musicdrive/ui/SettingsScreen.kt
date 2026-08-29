@@ -37,6 +37,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -77,6 +78,7 @@ fun SettingsScreen(
     onCloudProviderChange: (CloudProvider) -> Unit,
     driveFolderLabel: String?,
     onChangeDriveFolder: () -> Unit,
+    onSignOut: () -> Unit,
     cacheLimitBytes: Long,
     onCacheLimitChange: (Long) -> Unit,
     streamingCacheUsageBytes: Long,
@@ -136,6 +138,14 @@ fun SettingsScreen(
                     SettingsActionRow(
                         label = "Change Drive folder" + (driveFolderLabel?.let { " (currently \"$it\")" } ?: ""),
                         onClick = onChangeDriveFolder,
+                    )
+                    // Signs out of the Google account only - the picked Drive folder id is kept
+                    // (same "toggle off doesn't forget the picked location" behavior as the rest
+                    // of this screen), so signing back in with the same account needs no re-pick.
+                    SettingsActionRow(
+                        label = "Sign out",
+                        onClick = onSignOut,
+                        textColor = MaterialTheme.colorScheme.error,
                     )
                 }
 
@@ -441,7 +451,7 @@ private fun SettingsRadioRow(label: String, selected: Boolean, onClick: () -> Un
 }
 
 @Composable
-private fun SettingsActionRow(label: String, onClick: () -> Unit) {
+private fun SettingsActionRow(label: String, onClick: () -> Unit, textColor: Color = Color.Unspecified) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -452,6 +462,7 @@ private fun SettingsActionRow(label: String, onClick: () -> Unit) {
         Text(
             label,
             style = MaterialTheme.typography.bodyLarge,
+            color = textColor,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )

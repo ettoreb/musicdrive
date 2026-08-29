@@ -1,6 +1,7 @@
 package com.ettore.musicdrive.auth
 
 import android.content.Context
+import androidx.credentials.ClearCredentialStateRequest
 import androidx.credentials.CredentialManager
 import androidx.credentials.CustomCredential
 import androidx.credentials.GetCredentialRequest
@@ -40,6 +41,17 @@ class GoogleSignInManager(private val context: Context) {
 
     /** Shows the account picker / consent UI, offering any Google account on the device. */
     suspend fun signInInteractive(): SignInResult = signIn(filterByAuthorizedAccounts = false, autoSelectEnabled = false)
+
+    /**
+     * Clears Credential Manager's remembered sign-in state so a later [signInSilently] won't
+     * silently succeed again - this does NOT revoke the Drive `drive.readonly` grant itself
+     * (that's a separate consent tracked by [DriveAuthorizationManager]/Google's account
+     * settings, not something Credential Manager owns), so re-signing in with the same account
+     * later doesn't need the user to re-approve Drive access.
+     */
+    suspend fun signOut() {
+        credentialManager.clearCredentialState(ClearCredentialStateRequest())
+    }
 
     private suspend fun signIn(filterByAuthorizedAccounts: Boolean, autoSelectEnabled: Boolean): SignInResult {
         val option = GetGoogleIdOption.Builder()

@@ -41,6 +41,7 @@ import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -210,6 +211,7 @@ class MainActivity : ComponentActivity() {
                     onPlayAlbum = ::playAlbum,
                     isSignedInThisProcess = app.isSignedInThisProcess,
                     onSignedIn = { app.isSignedInThisProcess = true },
+                    onSignedOut = { app.isSignedInThisProcess = false },
                     pickedLocalFolderUri = pickedLocalFolderUri,
                     onLocalFolderUriConsumed = { pickedLocalFolderUri = null },
                     onRequestLocalFolder = { pickLocalFolder.launch(null) },
@@ -225,11 +227,20 @@ class MainActivity : ComponentActivity() {
             MediaItem.Builder()
                 .setMediaId(track.id)
                 .setUri(source.mediaUri(track.id.rawId()))
-                // Best-guess metadata (the Drive filename) so the queue has something to
-                // show for tracks Media3 hasn't decoded yet; real ID3 metadata overrides
-                // this automatically once a track actually starts playing.
+                // Best-guess metadata (the Drive filename, and the album's already-known
+                // artist) so the queue - and the full player - has something to show for
+                // tracks Media3 hasn't decoded yet; real ID3 metadata overrides this
+                // automatically once a track actually starts playing. artist matters here
+                // as much as title: leaving it unset meant it went blank on every track
+                // change until Media3 re-extracted the real tag from the new stream, which
+                // hid the artist Text in FullPlayerScreen for a beat and reflowed/shifted
+                // the art above it (found live, not hypothetical).
                 .setMediaMetadata(
-                    MediaMetadata.Builder().setTitle(track.name.withoutAudioExtension()).setAlbumTitle(album.name).build(),
+                    MediaMetadata.Builder()
+                        .setTitle(track.name.withoutAudioExtension())
+                        .setAlbumTitle(album.name)
+                        .setArtist(album.artistHint)
+                        .build(),
                 )
                 .build()
         }
@@ -299,6 +310,7 @@ private fun MusicDriveApp(
     onPlayAlbum: (DriveAlbum, startIndex: Int) -> Unit,
     isSignedInThisProcess: Boolean,
     onSignedIn: () -> Unit,
+    onSignedOut: () -> Unit,
     pickedLocalFolderUri: Uri?,
     onLocalFolderUriConsumed: () -> Unit,
     onRequestLocalFolder: () -> Unit,
@@ -427,6 +439,19 @@ private fun MusicDriveApp(
                     if (localFolderReady()) loadLibrary() else state = AppState.Error(signIn.message)
                 }
             }
+        }
+    }
+
+    // Disconnects the Google account without forgetting the previously-picked Drive folder id -
+    // switching cloudProvider back to GOOGLE_DRIVE later re-prompts sign-in but not a folder
+    // re-pick, same as the existing on/off-vs-clear distinction the rest of this screen already
+    // uses (see docs/multi-source-plan.md §7).
+    fun signOut() {
+        scope.launch {
+            runCatching { signInManager.signOut() }
+            onSignedOut()
+            settingsRepository.setCloudProvider(CloudProvider.NONE)
+            proceedToLibraryOrPicker()
         }
     }
 
@@ -712,6 +737,24 @@ private fun MusicDriveApp(
                             ) {
                                 Text("Sign in with Google")
                             }
+                            // Drive sign-in isn't the only way in - local files are a fully
+                            // standalone source (see data/source/MusicSource.kt), so this screen
+                            // shouldn't hard-block someone who only wants a local library. Picking
+                            // a folder here also clears cloudProvider to NONE (rather than leaving
+                            // it at GOOGLE_DRIVE with no account attached) so this doesn't keep
+                            // silently retrying Drive sign-in on every later launch - Settings'
+                            // "Music Sources" section is the one place to opt back into Drive.
+                            TextButton(
+                                modifier = Modifier.padding(top = 8.dp),
+                                onClick = {
+                                    scope.launch {
+                                        settingsRepository.setCloudProvider(CloudProvider.NONE)
+                                        onRequestLocalFolder()
+                                    }
+                                },
+                            ) {
+                                Text("Use a local folder instead")
+                            }
                         }
 
                         is AppState.Loading -> Box(
@@ -840,6 +883,7 @@ private fun MusicDriveApp(
                                 onCloudProviderChange = ::onCloudProviderChanged,
                                 driveFolderLabel = driveFolderName,
                                 onChangeDriveFolder = { state = AppState.PickingFolder },
+                                onSignOut = ::signOut,
                                 cacheLimitBytes = cacheLimitBytes,
                                 onCacheLimitChange = { bytes -> scope.launch { settingsRepository.setCacheLimitBytes(bytes) } },
                                 streamingCacheUsageBytes = streamingCacheUsageBytes,

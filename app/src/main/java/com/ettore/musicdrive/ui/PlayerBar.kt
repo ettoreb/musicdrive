@@ -1,6 +1,10 @@
 package com.ettore.musicdrive.ui
 
 import android.graphics.BitmapFactory
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -51,6 +55,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -116,18 +121,101 @@ private fun rememberArtBitmap(artworkData: ByteArray?): ImageBitmap? = remember(
  * cover" ambient effect YouTube Music/Spotify use. Vibrant swatch first
  * since it reads best as a background tint; falls back to muted/dominant
  * when the art has no strongly saturated color (e.g. mostly-white covers).
- * Decoded once per artwork change, same as [rememberArtBitmap] - not
- * shared with it to keep that function's existing callers untouched.
+ *
+ * Holds the OUTGOING track's color across the gap where a track change has
+ * transiently cleared [artworkData] but Media3 hasn't finished re-extracting
+ * it from the new stream yet, instead of dropping straight to "no color"
+ * and popping back a moment later - that double transition (color -> none ->
+ * color) was as much a part of the reported flicker as the art image itself.
+ * Only actually clears to "no color" after [holdGraceMs] with nothing new
+ * computed, for a track that genuinely has no art (or no strong color in it).
  */
 @Composable
-private fun rememberDominantColor(artworkData: ByteArray?): Color? = remember(artworkData) {
-    artworkData
-        ?.let { bytes -> BitmapFactory.decodeByteArray(bytes, 0, bytes.size) }
-        ?.let { bitmap ->
-            val palette = Palette.from(bitmap).generate()
-            val swatch = palette.vibrantSwatch ?: palette.mutedSwatch ?: palette.dominantSwatch
-            swatch?.rgb?.let { Color(it) }
+private fun rememberDominantColor(mediaId: String, artworkData: ByteArray?, holdGraceMs: Long = 600): Color? {
+    val computed = remember(artworkData) {
+        artworkData
+            ?.let { bytes -> BitmapFactory.decodeByteArray(bytes, 0, bytes.size) }
+            ?.let { bitmap ->
+                val palette = Palette.from(bitmap).generate()
+                val swatch = palette.vibrantSwatch ?: palette.mutedSwatch ?: palette.dominantSwatch
+                swatch?.rgb?.let { Color(it) }
+            }
+    }
+    var displayed by remember { mutableStateOf(computed) }
+    val latestComputed by rememberUpdatedState(computed)
+
+    LaunchedEffect(computed) {
+        if (computed != null) displayed = computed
+    }
+    LaunchedEffect(mediaId) {
+        delay(holdGraceMs)
+        if (latestComputed == null) displayed = null
+    }
+
+    return displayed
+}
+
+/**
+ * Renders whichever album art source is currently available - the real decoded
+ * bitmap (Media3's own ID3 extraction from the live stream), the already-resolved
+ * [fallbackArt] (disk-cached cover, same art the library grid uses), or a placeholder
+ * letter - inside a [Crossfade] so switching between them fades instead of hard-cutting.
+ *
+ * On every track change, Media3 briefly clears the real bitmap before it re-extracts
+ * art from the new stream. Dropping straight to the fallback for that gap (the first
+ * version of this fix) turned one transition into two - a pop to the fallback, then
+ * another pop back once the real bitmap landed a moment later, often showing the exact
+ * same picture twice for a same-album transition. This instead HOLDS the outgoing
+ * track's art on screen across the gap, and only actually falls to the fallback/
+ * placeholder if nothing real has shown up within [holdGraceMs] - so a same-album skip
+ * shows no transition at all, and a genuine art change crossfades exactly once.
+ */
+@Composable
+private fun CrossfadingAlbumArt(
+    mediaId: String,
+    artBitmap: ImageBitmap?,
+    fallbackArt: Any?,
+    placeholderText: String,
+    placeholderStyle: androidx.compose.ui.text.TextStyle,
+    modifier: Modifier = Modifier,
+    holdGraceMs: Long = 600,
+) {
+    var displayed by remember { mutableStateOf<Any?>(artBitmap ?: fallbackArt) }
+    val latestArtBitmap by rememberUpdatedState(artBitmap)
+    val latestFallbackArt by rememberUpdatedState(fallbackArt)
+
+    LaunchedEffect(artBitmap) {
+        if (artBitmap != null) displayed = artBitmap
+    }
+    LaunchedEffect(mediaId) {
+        delay(holdGraceMs)
+        if (latestArtBitmap == null) displayed = latestFallbackArt
+    }
+
+    Crossfade(
+        targetState = displayed,
+        modifier = modifier,
+        animationSpec = tween(durationMillis = 350, easing = FastOutSlowInEasing),
+        label = "albumArt",
+    ) { source ->
+        when (source) {
+            is ImageBitmap -> Image(
+                bitmap = source,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
+            )
+            null -> Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                Text(placeholderText, style = placeholderStyle, color = MaterialTheme.colorScheme.onPrimaryContainer)
+            }
+            else -> AsyncImage(
+                model = source,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
+            )
         }
+    }
 }
 
 /** Mirrors a Media3 MediaController's playback state into Compose state, live. */
@@ -248,27 +336,14 @@ fun MiniPlayerBar(
                     .background(MaterialTheme.colorScheme.primaryContainer),
                 contentAlignment = Alignment.Center,
             ) {
-                if (artBitmap != null) {
-                    Image(
-                        bitmap = artBitmap,
-                        contentDescription = null,
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier.fillMaxSize(),
-                    )
-                } else if (fallbackArt != null) {
-                    AsyncImage(
-                        model = fallbackArt,
-                        contentDescription = null,
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier.fillMaxSize(),
-                    )
-                } else {
-                    Text(
-                        state.title.take(1).uppercase().ifBlank { "?" },
-                        style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer,
-                    )
-                }
+                CrossfadingAlbumArt(
+                    mediaId = state.mediaId,
+                    artBitmap = artBitmap,
+                    fallbackArt = fallbackArt,
+                    placeholderText = state.title.take(1).uppercase().ifBlank { "?" },
+                    placeholderStyle = MaterialTheme.typography.titleMedium,
+                    modifier = Modifier.fillMaxSize(),
+                )
             }
             Spacer(Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f)) {
@@ -318,7 +393,7 @@ fun FullPlayerScreen(
     fallbackArt: Any? = null,
 ) {
     val artBitmap = rememberArtBitmap(state.artworkData)
-    val dominantColor = rememberDominantColor(state.artworkData)
+    val dominantColor = rememberDominantColor(state.mediaId, state.artworkData)
     // Accumulated horizontal drag since the gesture started; a swipe past the
     // threshold on release skips forward/back, like a mini cover carousel.
     var dragTotal by remember { mutableStateOf(0f) }
@@ -356,13 +431,21 @@ fun FullPlayerScreen(
     // Per-track ambient glow from the album art's dominant color, fading into the
     // theme surface - purely decorative, drawn behind everything else, so it never
     // affects the LocalContentColor propagation Surface above sets up for the text.
-    if (dominantColor != null) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(Brush.verticalGradient(listOf(dominantColor.copy(alpha = 0.35f), Color.Transparent))),
-        )
-    }
+    // Always rendered (rather than only while dominantColor != null) and animated via
+    // animateColorAsState so the glow FADES between tracks instead of popping in/out
+    // instantly - the art crossfade above and this glow snapping in sync was the other
+    // half of the flicker found live on every track change.
+    val glowTarget = (dominantColor ?: Color.Black).copy(alpha = if (dominantColor != null) 0.35f else 0f)
+    val animatedGlow by animateColorAsState(
+        targetValue = glowTarget,
+        animationSpec = tween(durationMillis = 350, easing = FastOutSlowInEasing),
+        label = "playerGlow",
+    )
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Brush.verticalGradient(listOf(animatedGlow, Color.Transparent))),
+    )
     Column(
         modifier = Modifier
             .statusBarsPadding()
@@ -402,27 +485,14 @@ fun FullPlayerScreen(
                 },
             contentAlignment = Alignment.Center,
         ) {
-            if (artBitmap != null) {
-                Image(
-                    bitmap = artBitmap,
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize(),
-                )
-            } else if (fallbackArt != null) {
-                AsyncImage(
-                    model = fallbackArt,
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize(),
-                )
-            } else {
-                Text(
-                    state.title.take(1).uppercase().ifBlank { "?" },
-                    style = MaterialTheme.typography.displayLarge,
-                    color = MaterialTheme.colorScheme.onPrimaryContainer,
-                )
-            }
+            CrossfadingAlbumArt(
+                mediaId = state.mediaId,
+                artBitmap = artBitmap,
+                fallbackArt = fallbackArt,
+                placeholderText = state.title.take(1).uppercase().ifBlank { "?" },
+                placeholderStyle = MaterialTheme.typography.displayLarge,
+                modifier = Modifier.fillMaxSize(),
+            )
         }
 
         Row(modifier = Modifier.fillMaxWidth().padding(top = 4.dp), horizontalArrangement = Arrangement.Start) {
